@@ -1,0 +1,222 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Relay Gateway</title>
+<link rel="manifest" href="/manifest.json">
+<script src="/i18n.js"></script>
+<link rel="icon" href="/icon.svg" type="image/svg+xml">
+<meta name="theme-color" content="#2563eb">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Relais">
+<style>
+:root { --bg:#f4f5f7; --card:#fff; --fg:#1d2330; --muted:#6b7280; --line:#e3e6ea;
+        --on:#16a34a; --off:#cbd2da; --err:#dc2626; --accent:#2563eb; }
+@media (prefers-color-scheme: dark) {
+  :root { --bg:#12151b; --card:#1b2029; --fg:#e8ebf0; --muted:#9aa3af; --line:#2a313c;
+          --off:#3a4250; }
+}
+* { box-sizing: border-box; }
+body { margin:0; font:15px/1.4 system-ui, sans-serif; background:var(--bg); color:var(--fg); }
+select.lang { margin-left:auto; border:1px solid var(--line); background:var(--card); color:var(--fg); border-radius:6px; padding:4px 6px; font:inherit; font-size:13px; }
+header { padding:14px 16px; border-bottom:1px solid var(--line); background:var(--card);
+         display:flex; flex-wrap:wrap; gap:6px 16px; align-items:baseline; }
+header h1 { font-size:18px; margin:0; }
+header .info { color:var(--muted); font-size:13px; }
+main { max-width:900px; margin:0 auto; padding:16px; display:grid; gap:14px; }
+#boards { display:grid; gap:14px; }
+.card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:14px; }
+.card h2 { font-size:15px; margin:0 0 2px; }
+.meta { color:var(--muted); font-size:12px; margin-bottom:10px; }
+.relays { display:grid; grid-template-columns:repeat(3, 1fr); gap:8px; }
+@media (min-width:600px) { .relays { grid-template-columns:repeat(6, 1fr); } }
+.relay { border:0; border-radius:8px; padding:12px 0; font-weight:600; cursor:pointer;
+         background:var(--off); color:var(--fg); }
+.relay.on { background:var(--on); color:#fff; }
+.relay .nm { display:block; font-weight:400; font-size:12px; margin-top:2px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; padding:0 4px; }
+.names { display:grid; grid-template-columns:repeat(2, 1fr); gap:8px; margin-top:10px; }
+@media (min-width:600px) { .names { grid-template-columns:repeat(3, 1fr); } }
+.names label { font-size:12px; color:var(--muted); display:grid; gap:3px; }
+.http { font-family:ui-monospace, monospace; font-size:12px; color:var(--muted); margin-top:8px; }
+.http .url { word-break:break-all; color:var(--fg); }
+.relay.unknown { background:repeating-linear-gradient(45deg,var(--off),var(--off) 6px,transparent 6px,transparent 12px);
+                 border:1px solid var(--line); }
+.relay:disabled { opacity:.5; cursor:wait; }
+.row { display:flex; flex-wrap:wrap; gap:8px; margin-top:10px; align-items:center; }
+button.small { border:1px solid var(--line); background:transparent; color:var(--fg);
+               border-radius:6px; padding:5px 10px; cursor:pointer; }
+input { border:1px solid var(--line); background:var(--bg); color:var(--fg);
+        border-radius:6px; padding:6px 8px; font:inherit; min-width:0; }
+.reply { font-family:ui-monospace, monospace; font-size:12px; color:var(--muted); }
+.error { color:var(--err); }
+.empty { color:var(--muted); text-align:center; padding:30px 10px; }
+details summary { cursor:pointer; font-weight:600; }
+a.btnlink { border:1px solid var(--line); color:var(--fg); border-radius:6px; padding:5px 10px; text-decoration:none; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Relay Gateway</h1>
+  <span class="info" id="gwinfo" data-i18n="connecting"></span>
+  <select class="lang" id="lang" aria-label="Language"></select>
+</header>
+<main>
+  <div id="boards"><div class="empty" data-i18n="searching_boards"></div></div>
+
+  <div class="card row" style="margin-top:0">
+    <a class="small btnlink" href="/setup" data-i18n="wifi_setup"></a>
+    <span class="meta" style="margin:0" data-i18n="tip_home"></span>
+  </div>
+</main>
+
+<script>
+const $ = (s) => document.querySelector(s);
+let busy = false;
+let last = null;      // last /api/boards answer, for redraw after language change
+let editing = null;   // address of the board whose names are being edited
+
+async function api(path, body) {
+  const opt = body ? { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                       body: JSON.stringify(body) } : {};
+  const r = await fetch(path, opt);
+  return r.json();
+}
+
+function esc(s) { return String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+
+function modeText(m) {
+  return m.split('+').map(x => t('mode_' + x)).join(' + ');
+}
+
+function render(data) {
+  last = data;
+  const g = data.gateway;
+  $('#gwinfo').textContent =
+    `${g.host} · ${g.ip} · ${modeText(g.mode)}${g.ssid ? ' (' + g.ssid + ')' : ''} · ` +
+    `${t('boards_count', { n: data.boards.length })}, ${t('usb_count', { n: g.usb_devices })} · v${g.version}`;
+
+  const box = $('#boards');
+  if (!data.boards.length) {
+    box.innerHTML = `<div class="empty">${t('no_boards')}</div>`;
+    return;
+  }
+  if (busy || editing !== null) return;   // do not redraw while a command runs or names are edited
+
+  box.innerHTML = data.boards.map(b => {
+    const known = b.state >= 0;
+    const btns = [...Array(b.relays || 6)].map((_, i) => {
+      const on = known && (b.state >> i) & 1;
+      const cls = known ? (on ? 'on' : '') : 'unknown';
+      const nm = (b.names && b.names[i]) || '';
+      return `<button class="relay ${cls}" data-addr="${b.addr}" data-n="${i + 1}" data-on="${on ? 1 : 0}" title="${esc(nm)}">${i + 1}${nm ? `<span class="nm">${esc(nm)}</span>` : ''}</button>`;
+    }).join('');
+    const age = b.age_ms === null ? t('status_none') :
+                b.age_ms < 10000 ? t('status_current') : t('status_ago', { s: Math.round(b.age_ms / 1000) });
+    const err = b.last_error ? ` · <span class="error">${esc(b.last_error)}</span>` : '';
+    return `<div class="card">
+      <h2>${t('board')} ${esc(b.serial || '?')}</h2>
+      <div class="meta">${t('usb_addr')} ${b.addr} · ${esc(b.location)} · ${t('status')}: ${age}${err}</div>
+      <div class="relays">${btns}</div>
+      <div class="row">
+        <button class="small" data-addr="${b.addr}" data-cmd="OFF ALL">${t('all_off')}</button>
+        <button class="small" data-addr="${b.addr}" data-cmd="ON ALL">${t('all_on')}</button>
+        <input placeholder="${t('cmd_ph')}" data-raw="${b.addr}">
+        <button class="small" data-addr="${b.addr}" data-send="1">${t('send')}</button>
+        <button class="small" data-addr="${b.addr}" data-edit="1">${t('edit_names')}</button>
+        <span class="reply" id="reply-${b.addr}"></span>
+      </div>
+      <div id="edit-${b.addr}"></div>
+    </div>`;
+  }).join('');
+}
+
+async function refresh() {
+  try { render(await api('/api/boards')); }
+  catch (e) { $('#gwinfo').textContent = t('no_connection'); }
+}
+
+async function send(addr, cmd) {
+  busy = true;
+  document.querySelectorAll(`[data-addr="${addr}"]`).forEach(b => b.disabled = true);
+  const out = $('#reply-' + addr);
+  if (out) { out.textContent = cmd + ' …'; out.className = 'reply'; }
+  try {
+    const r = await api('/api/cmd', { addr: Number(addr), cmd });
+    if (out) { out.textContent = `${cmd} → ${r.reply}`; out.className = r.ok ? 'reply' : 'reply error'; }
+  } catch (e) {
+    if (out) { out.textContent = t('error') + ': ' + e; out.className = 'reply error'; }
+  }
+  busy = false;
+  await refresh();
+  const again = $('#reply-' + addr);
+  if (again && out) { again.textContent = out.textContent; again.className = out.className; }
+}
+
+function openEditor(addr) {
+  const b = last && last.boards.find(x => x.addr == addr);
+  if (!b) return;
+  editing = Number(addr);
+  const fields = [...Array(b.relays || 6)].map((_, i) => `
+    <label>${t('relay_n', { n: i + 1 })}
+      <input data-name="${i + 1}" maxlength="32" value="${esc((b.names && b.names[i]) || '')}" placeholder="${t('name_ph')}">
+    </label>`).join('');
+  const ex = (b.names || []).find(n => n) || t('name_example');
+  const url = `${location.origin}/switch?name=${encodeURIComponent(ex)}&state=on`;
+  $('#edit-' + addr).innerHTML = `
+    <div class="names">${fields}</div>
+    <div class="row">
+      <button class="small" data-addr="${addr}" data-save="1">${t('save')}</button>
+      <button class="small" data-addr="${addr}" data-cancel="1">${t('cancel')}</button>
+      <span class="reply" id="editmsg-${addr}"></span>
+    </div>
+    <div class="http">${t('http_hint')}<br><span class="url">${esc(url)}</span></div>`;
+}
+
+async function saveNames(addr) {
+  const b = last && last.boards.find(x => x.addr == addr);
+  const msg = $('#editmsg-' + addr);
+  if (!b) return;
+  const errors = [];
+  for (const inp of document.querySelectorAll(`#edit-${addr} input[data-name]`)) {
+    const n = Number(inp.dataset.name);
+    const v = inp.value.trim();
+    if (v === ((b.names && b.names[n - 1]) || '')) continue;
+    try {
+      const r = await api('/api/name', { serial: b.serial, relay: n, name: v });
+      if (!r.ok) errors.push(`${t('relay_n', { n })}: ${t('err_' + r.reply)}`);
+    } catch (e) { errors.push(String(e)); }
+  }
+  if (errors.length) {
+    msg.textContent = errors.join(' · ');
+    msg.className = 'reply error';
+    return;
+  }
+  editing = null;
+  await refresh();
+}
+
+document.addEventListener('click', (ev) => {
+  const el = ev.target.closest('button') || ev.target;
+  if (!el.dataset || !el.dataset.addr) return;
+  if (el.dataset.edit) { openEditor(el.dataset.addr); return; }
+  if (el.dataset.save) { saveNames(el.dataset.addr); return; }
+  if (el.dataset.cancel) { editing = null; refresh(); return; }
+  if (el.classList.contains('relay')) {
+    send(el.dataset.addr, (el.dataset.on === '1' ? 'OFF ' : 'ON ') + el.dataset.n);
+  } else if (el.dataset.cmd) {
+    send(el.dataset.addr, el.dataset.cmd);
+  } else if (el.dataset.send) {
+    const inp = document.querySelector(`[data-raw="${el.dataset.addr}"]`);
+    if (inp.value.trim()) send(el.dataset.addr, inp.value.trim());
+  }
+});
+
+applyI18n();
+langSelect($('#lang'), () => { if (last) render(last); });
+refresh();
+setInterval(refresh, 2000);
+</script>
+</body>
+</html>

@@ -1,0 +1,213 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Relay Gateway einrichten</title>
+<link rel="manifest" href="/manifest.json">
+<script src="/i18n.js"></script>
+<link rel="icon" href="/icon.svg" type="image/svg+xml">
+<meta name="theme-color" content="#2563eb">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<style>
+:root { --bg:#f4f5f7; --card:#fff; --fg:#1d2330; --muted:#6b7280; --line:#e3e6ea;
+        --accent:#2563eb; --ok:#16a34a; --err:#dc2626; }
+@media (prefers-color-scheme: dark) {
+  :root { --bg:#12151b; --card:#1b2029; --fg:#e8ebf0; --muted:#9aa3af; --line:#2a313c; }
+}
+* { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+body { margin:0; font:16px/1.45 system-ui, sans-serif; background:var(--bg); color:var(--fg); }
+.top { background:var(--accent); color:#fff; padding:28px 20px 22px; }
+.top h1 { margin:0; font-size:22px; }
+.top p { margin:6px 0 0; opacity:.9; font-size:15px; }
+.top { position:relative; }
+select.lang { position:absolute; top:14px; right:14px; border:0; border-radius:6px; padding:4px 6px; font:inherit; font-size:13px; background:rgba(255,255,255,.2); color:#fff; }
+select.lang option { color:#000; }
+main { max-width:520px; margin:0 auto; padding:16px; }
+.list { background:var(--card); border:1px solid var(--line); border-radius:14px; overflow:hidden; }
+.net { padding:14px 16px; border-bottom:1px solid var(--line); cursor:pointer; }
+.net:last-child { border-bottom:0; }
+.net .head { display:flex; align-items:center; gap:10px; }
+.net .name { flex:1; font-weight:600; word-break:break-all; }
+.net .meta { color:var(--muted); font-size:13px; }
+.net form { display:none; margin-top:12px; gap:10px; }
+.net.open form { display:grid; }
+input { width:100%; font:inherit; padding:12px; border-radius:10px; border:1px solid var(--line);
+        background:var(--bg); color:var(--fg); }
+button { font:inherit; font-weight:600; padding:12px; border-radius:10px; border:0;
+         background:var(--accent); color:#fff; cursor:pointer; }
+button.ghost { background:transparent; color:var(--accent); border:1px solid var(--line); }
+.bars { display:inline-flex; gap:2px; align-items:flex-end; height:14px; }
+.bars i { width:4px; background:var(--line); border-radius:1px; }
+.bars i.on { background:var(--fg); }
+.hint { color:var(--muted); font-size:14px; margin:14px 4px; }
+.panel { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:22px 18px; text-align:center; }
+.panel h2 { margin:8px 0; font-size:20px; }
+.addr { display:block; font-size:20px; font-weight:700; margin:10px 0; color:var(--accent); word-break:break-all; }
+.spin { width:38px; height:38px; border:4px solid var(--line); border-top-color:var(--accent);
+        border-radius:50%; margin:6px auto; animation:s 1s linear infinite; }
+@keyframes s { to { transform:rotate(360deg); } }
+.err { color:var(--err); }
+.big { font-size:44px; }
+[hidden] { display:none !important; }
+</style>
+</head>
+<body>
+<div class="top">
+  <select class="lang" id="lang" aria-label="Language"></select>
+  <h1>Relay Gateway</h1>
+  <p data-i18n="setup_question"></p>
+</div>
+<main>
+  <section id="pick">
+    <div class="list" id="nets"><div class="net"><div class="meta" data-i18n="searching_nets"></div></div></div>
+    <p class="hint">
+      <button class="ghost" id="rescan" type="button" data-i18n="rescan"></button>
+      &nbsp; <span data-i18n="only24"></span>
+    </p>
+    <p class="err" id="formerr"></p>
+  </section>
+
+  <section id="wait" class="panel" hidden>
+    <div class="spin"></div>
+    <h2 id="w-title"></h2>
+    <p class="hint" data-i18n="wait_hint"></p>
+  </section>
+
+  <section id="done" class="panel" hidden>
+    <div class="big">✓</div>
+    <h2 data-i18n="done"></h2>
+    <p id="d-text"></p>
+    <a class="addr" id="d-ip" href="#"></a>
+    <p class="hint"><span data-i18n="or"></span> <b id="d-host"></b></p>
+    <p class="hint" id="d-hint"></p>
+    <button class="ghost" id="copy" type="button" data-i18n="copy"></button>
+  </section>
+</main>
+
+<script>
+const $ = (s) => document.querySelector(s);
+const esc = (s) => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+async function getJSON(url, ms) {
+  const ctl = new AbortController();
+  const t = setTimeout(() => ctl.abort(), ms || 6000);
+  try { const r = await fetch(url, { signal: ctl.signal, cache: 'no-store' }); return await r.json(); }
+  finally { clearTimeout(t); }
+}
+
+function bars(rssi) {
+  const n = rssi > -55 ? 4 : rssi > -65 ? 3 : rssi > -75 ? 2 : 1;
+  return '<span class="bars">' + [1,2,3,4].map(i =>
+    `<i class="${i <= n ? 'on' : ''}" style="height:${i * 25}%"></i>`).join('') + '</span>';
+}
+
+function netRow(n, manual) {
+  const lock = n.secure ? '🔒' : '';
+  return `<div class="net" data-ssid="${esc(n.ssid || '')}">
+    <div class="head">
+      <span class="name">${manual ? t('other_net') : esc(n.ssid)}</span>
+      <span class="meta">${manual ? '' : lock + ' ' + bars(n.rssi)}</span>
+    </div>
+    <form>
+      ${manual ? `<input name="ssid" placeholder="${t('ssid_ph')}" autocapitalize="off" autocorrect="off" required>` : ''}
+      ${n.secure || manual ? `<input name="password" type="password" placeholder="${t('pass_ph')}" autocomplete="current-password">` : ''}
+      <button type="submit">${t('connect')}</button>
+    </form>
+  </div>`;
+}
+
+let nets = [];
+function renderNets() {
+  const rows = nets.map(n => netRow(n, false));
+  rows.push(netRow({ ssid: '', secure: true }, true));
+  $('#nets').innerHTML = rows.join('');
+}
+
+async function scan() {
+  $('#nets').innerHTML = `<div class="net"><div class="meta">${t('searching_nets')}</div></div>`;
+  try {
+    const r = await getJSON('/api/scan', 15000);
+    nets = r.networks || [];
+    const rows = nets.map(n => netRow(n, false));
+    rows.push(netRow({ ssid: '', secure: true }, true));
+    $('#nets').innerHTML = rows.join('');
+  } catch (e) {
+    $('#nets').innerHTML = netRow({ ssid: '', secure: true }, true);
+  }
+}
+
+$('#nets').addEventListener('click', (ev) => {
+  const row = ev.target.closest('.net');
+  if (!row || ev.target.closest('form')) return;
+  document.querySelectorAll('.net.open').forEach(r => r !== row && r.classList.remove('open'));
+  row.classList.toggle('open');
+  const inp = row.querySelector('input');
+  if (inp && row.classList.contains('open')) inp.focus();
+});
+
+$('#nets').addEventListener('submit', async (ev) => {
+  ev.preventDefault();
+  const row = ev.target.closest('.net');
+  const f = new FormData(ev.target);
+  const ssid = (f.get('ssid') || row.dataset.ssid).trim();
+  const password = f.get('password') || '';
+  $('#formerr').textContent = '';
+  try {
+    const r = await (await fetch('/api/wifi', { method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ssid, password }) })).json();
+    if (!r.ok) { $('#formerr').textContent = tErr(r.reply); return; }
+  } catch (e) { $('#formerr').textContent = t('err_unreachable'); return; }
+  waitFor(ssid);
+});
+
+async function waitFor(ssid) {
+  $('#pick').hidden = true; $('#wait').hidden = false;
+  $('#w-title').textContent = t('connecting_to', { ssid });
+  const end = Date.now() + 45000;
+  while (Date.now() < end) {
+    await new Promise(r => setTimeout(r, 1200));
+    let st;
+    try { st = await getJSON('/api/wifi/status', 4000); } catch (e) { continue; }  // AP may hop channel
+    if (st.state === 'ok') return showDone(ssid, st);
+    if (st.state === 'failed') return showPick(tErr(st.message || 'fail:0'));
+  }
+  showPick(t('err_timeout'));
+}
+
+function showPick(msg) {
+  $('#wait').hidden = true; $('#pick').hidden = false;
+  $('#formerr').textContent = msg;
+}
+
+let doneSsid = null;
+function showDone(ssid, st) {
+  doneSsid = ssid;
+  $('#wait').hidden = true; $('#done').hidden = false;
+  $('#d-text').textContent = t('done_text', { ssid });
+  $('#d-hint').textContent = t('done_hint', { ssid });
+  const url = 'http://' + st.ip + '/';
+  $('#d-ip').textContent = url; $('#d-ip').href = url;
+  $('#d-host').textContent = 'http://' + st.host + '.local/';
+  $('#copy').onclick = async () => {
+    try { await navigator.clipboard.writeText(url); $('#copy').textContent = t('copied'); }
+    catch (e) { prompt(t('address') + ':', url); }
+  };
+}
+
+$('#rescan').onclick = scan;
+applyI18n();
+document.title = t('setup_title');
+langSelect($('#lang'), () => {
+  document.title = t('setup_title');
+  if (!$('#pick').hidden && nets.length) renderNets();
+  if (doneSsid) {
+    $('#d-text').textContent = t('done_text', { ssid: doneSsid });
+    $('#d-hint').textContent = t('done_hint', { ssid: doneSsid });
+  }
+});
+scan();
+</script>
+</body>
+</html>

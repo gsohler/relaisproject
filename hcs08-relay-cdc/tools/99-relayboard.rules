@@ -1,0 +1,8 @@
+# Relay board (pid.codes test VID/PID - change if you use your own PID)
+# Install: sudo cp 99-relayboard.rules /etc/udev/rules.d/ && sudo udevadm control --reload
+#
+# - /dev/relayboard symlink
+# - accessible for users in group dialout
+# - ModemManager must not probe the port (it would send AT commands)
+ATTRS{idVendor}=="1209", ATTRS{idProduct}=="0001", ENV{ID_MM_DEVICE_IGNORE}="1"
+SUBSYSTEM=="tty", ATTRS{idVendor}=="1209", ATTRS{idProduct}=="0001", SYMLINK+="relayboard", GROUP="dialout", MODE="0660"

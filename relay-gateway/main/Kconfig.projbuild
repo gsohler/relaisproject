@@ -1,0 +1,30 @@
+menu "Relay Gateway"
+
+    config GW_AP_PASSWORD
+        string "Setup access point password (min. 8 characters)"
+        default "relaygateway"
+        help
+            WPA2 password of the access point "RelayGW-XXXX" that is opened
+            when no WLAN is configured or the configured WLAN is unreachable.
+
+    config GW_WEB_PASSWORD
+        string "Web interface password (empty = no password)"
+        default ""
+        help
+            If set, the web interface and API require HTTP Basic Auth with
+            user "admin" and this password.
+
+    config GW_POLL_INTERVAL_MS
+        int "Status poll interval per board (ms)"
+        default 2000
+        range 500 60000
+
+    config GW_USB_VID
+        hex "USB vendor ID of the relay boards"
+        default 0x1209
+
+    config GW_USB_PID
+        hex "USB product ID of the relay boards"
+        default 0x0001
+
+endmenu

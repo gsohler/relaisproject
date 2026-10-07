@@ -1,0 +1,7 @@
+
+ cd esp-idf
+
+. ./export.sh
+cd ../relay-gateway
+idf.py build
+idf.py -p /dev/ttyACM0 flash monitor
