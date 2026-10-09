@@ -9,6 +9,7 @@
  *   GET              -> "STATE hh"
  *   ID               -> identification string
  *   HELP or ?        -> command list
+ *   BOOTLOADER       -> "OK", then the board restarts as USB drive (bootloader)
  * Every command answers "OK", "STATE hh", "ID ..." or "ERR <reason>".
  */
 #include "jm60.h"
@@ -16,8 +17,9 @@
 #include "usb_cdc.h"
 #include "relay.h"
 #include "timer.h"
+#include "layout.h"
 
-#define FW_VERSION "1.2"
+#define FW_VERSION "1.3"
 
 /* NV option bytes, programmed together with the code.
  * NVOPT 0xFFBF: KEYEN=0, FNORED=1, SEC=10 (unsecured). NVPROT 0xFFBD: no protection. */
@@ -122,6 +124,30 @@ static uint8_t parse_target(char *p)
 static void ok(void)            { cdc_puts("OK\r\n"); }
 static void err(const char *s)  { cdc_puts("ERR "); cdc_puts(s); cdc_puts("\r\n"); }
 
+#ifdef HOST_TEST
+extern void host_reset_hook(void);
+#endif
+
+/* Restart into the bootloader: magic word in RAM (survives the reset),
+ * USB detach, then an illegal opcode resets the MCU. */
+static void enter_bootloader(void)
+{
+    volatile uint8_t *magic = HW_PTR(BOOT_MAGIC_ADDR);
+
+    ok();
+    delay_ms(20);                   /* let "OK" reach the host */
+    magic[0] = BOOT_MAGIC_0;
+    magic[1] = BOOT_MAGIC_1;
+    magic[2] = BOOT_MAGIC_2;
+    magic[3] = BOOT_MAGIC_3;
+    USBCTL0 = 0;                    /* pull-up off: host sees a disconnect */
+#ifdef HOST_TEST
+    host_reset_hook();
+#else
+    __asm__(".db 0x8D");            /* illegal opcode -> reset */
+#endif
+}
+
 static void execute(char *p)
 {
     char *a;
@@ -162,8 +188,10 @@ static void execute(char *p)
         cdc_puts("\r\n");
     } else if (match(p, "ID")) {
         cdc_puts("ID " USB_PRODUCT_STR " FW " FW_VERSION "\r\n");
+    } else if (match(p, "BOOTLOADER")) {
+        enter_bootloader();
     } else if (match(p, "HELP") || match(p, "?")) {
-        cdc_puts("ON <n|ALL>, OFF <n|ALL>, TOGGLE <n>, SET <hex>, GET, ID\r\n");
+        cdc_puts("ON <n|ALL>, OFF <n|ALL>, TOGGLE <n>, SET <hex>, GET, ID, BOOTLOADER\r\n");
     } else {
         /* Echo what was received, so wrong line endings or stray bytes
          * (backspace, escape sequences) can be seen. Non-printable bytes
@@ -210,7 +238,12 @@ static void feed(char c)
  * watchdog is enabled out of reset, so switch it off first thing. */
 unsigned char _sdcc_external_startup(void)
 {
+    volatile uint8_t *p;
     SOPT1 = SOPT1_STOPE;        /* write-once: COP watchdog off, STOP allowed */
+    /* The SDCC hc08 startup code does not clear uninitialised variables:
+     * zero 0x00B0-0x0BFF (all variables; stack and request word untouched) */
+    for (p = HW_PTR(0x00B0); p != HW_PTR(0x0C00); p++)
+        *p = 0;
     return 0;                   /* 0 = go on and initialise RAM */
 }
 

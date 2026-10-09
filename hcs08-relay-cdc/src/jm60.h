@@ -13,6 +13,7 @@
 /* Host unit tests: registers and USB RAM live in a plain array */
 extern uint8_t host_mem[0x10000];
 #define HW_PTR(a) ((volatile uint8_t *)(host_mem + (uint16_t)(a)))
+#define __xdata                 /* SDCC storage class, not needed on the host */
 #else
 #define HW_PTR(a) ((volatile uint8_t *)(a))
 #endif
@@ -117,6 +118,27 @@ extern uint8_t host_mem[0x10000];
 #define SPMSC2 REG8(0x180A)
 
 #define SOPT1_STOPE 0x20
+
+/* ---- Pull-up enables (high page) ---- */
+#define PTCPE  REG8(0x1848)
+
+/* ---- Flash controller (high page) ---- */
+#define FCDIV  REG8(0x1820)        /* write-once after reset */
+#define FOPT   REG8(0x1821)
+#define FCNFG  REG8(0x1823)
+#define FPROT  REG8(0x1824)
+#define FSTAT  REG8(0x1825)
+#define FCMD   REG8(0x1826)
+
+#define FCDIV_FDIVLD  0x80
+#define FCDIV_PRDIV8  0x40
+#define FSTAT_FCBEF   0x80
+#define FSTAT_FCCF    0x40
+#define FSTAT_FPVIOL  0x20
+#define FSTAT_FACCERR 0x10
+
+#define FCMD_BYTE_PROG  0x20
+#define FCMD_PAGE_ERASE 0x40
 
 /* ---- USB RAM / buffer descriptor table ----
  * USB RAM: 0x1860..0x195F (256 bytes). BDT at 0x1860, 10 BDs x 3 bytes

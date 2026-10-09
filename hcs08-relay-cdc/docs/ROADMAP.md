@@ -2,28 +2,26 @@
 
 Planned after the relays work on real hardware (pin map found, RELAY_MAP_VALID = 1).
 
-## 1. Bootloader (USB mass storage, drag & drop)
+## 1. Bootloader (USB mass storage, drag & drop) - DONE (firmware 1.3, bootloader 1.0)
 
-- Lives at the start of flash, ~6-8 KB, write-protected via NVPROT. The
-  application is linked behind it and uses vector redirection.
-- Enumerates as a USB drive (own PID). Copy a `.s19` file onto it: sectors
-  containing S-records are parsed and programmed on the fly, everything else
-  (directory entries, .DS_Store, ...) is ignored. S-record lines split across
-  sector boundaries and out-of-order sectors must be handled (host test!).
-- Erase application area on first S-record, verify CRC after S9, then start
-  the application. Linux: eject / `sync` after copying.
-- Shows `INFO.TXT` (bootloader version, firmware version, serial number).
-- Entry:
-  - CDC command `BOOTLOADER` (magic word in RAM + software reset)
-  - automatically if the application CRC is invalid
-  - emergency: SDA (white) bridged to GND (yellow) on the JST connector at power-up
-- Relays are latching, so they keep their state while in the bootloader.
-  The bootloader must never drive relay pins.
+Implemented in `boot/`, see README "Firmware update over USB". Differences
+from the original plan:
+- Lives at the END of flash (0xDC00-0xFFFF), because the JM60 can only
+  protect the top of flash and redirects the vectors to just below the
+  protected area. Application 0x1960-0xDBFF.
+- Same VID/PID as the application; the host tells them apart by the
+  interface class (mass storage). The gateway refuses BOOTLOADER.
+- Completeness check: info block with CRC16 written last (no separate
+  "CRC fallback" needed: an incomplete update never gets an info block).
+- Still to verify on real hardware: Windows and macOS hosts, update time.
 
 ## 2. Serial number (stored in the bootloader area)
 
 - Fixed address inside the protected bootloader flash, survives every
-  application update. The JM60 has no unique ID, so the number is assigned.
+  application update: 0xFFA0-0xFFA7 serial, 0xFFA8-0xFFA9 CRC16
+  (CCITT-FALSE). The bootloader already reads it (USB serial string,
+  INFO.TXT); the production script that patches it into the bootloader
+  S19 and the application side (`SERIAL`) are still open. The JM60 has no unique ID, so the number is assigned.
 - RANDOM, not sequential (no conclusions about production volume).
   64 bit, so collisions are negligible even for many thousands of boards
   (32 bit would give ~0.3 % collision chance at 5000 boards).

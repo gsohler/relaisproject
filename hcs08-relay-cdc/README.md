@@ -45,33 +45,99 @@ ever needs to be mapped.
 ## Build
 
 ```sh
-sudo apt install sdcc make      # SDCC >= 4.0 with the s08 port
-make                            # -> build/relay_cdc.s19
-make XTAL_MHZ=16                # other crystal
-make CODE_LOC=0x8000            # MC9S08JM32 (flash starts at 0x8000)
-make test                       # host-side unit test of USB stack + parser (gcc)
+sudo apt install sdcc make python3   # SDCC >= 4.0 with the s08 port
+make                  # firmware file + bootloader
+make test             # host tests: application and bootloader (gcc)
+make XTAL_MHZ=16      # other crystal
 make EXTRA_CFLAGS=-DRELAY_OFF_AT_BOOT=0  # override board.h settings
 ```
 
-Current size: about 5 KB flash and 0.5 KB RAM.
+| Output | Use |
+|---|---|
+| `build/relay_fw-<version>.s19` | **Firmware file.** Copy it onto the `RELAYBOOT` drive. |
+| `build/bootloader.s19` | Bootloader alone (USBDM). |
+| `build/relay_combined-<version>.s19` | Bootloader + firmware in one file (`make combined`), for new boards. |
+| `build/relay_cdc.s19` | Raw SDCC output of the application, standalone (without bootloader). |
 
-`make test` runs the USB stack and the command parser on the PC against
-a model of the JM60 buffer descriptors. It covers enumeration, SET_ADDRESS
-timing, the descriptor chain, ZLP handling, STALL recovery, endpoint halt,
-line coding, the relay commands and the exact pulse sequence on each pin.
-It does not replace a test on real
-hardware.
+The version comes from `FW_VERSION` in `src/main.c`. Increase it for every
+release; `INFO.TXT` on the drive and the `ID` command show it.
 
-## Flash
+`make test` runs the USB stacks, the command parser, the FAT emulation and
+the S-record programming on the PC (gcc) against a model of the JM60 USB
+engine and flash. If the uCsim simulator is installed
+(`sudo apt install sdcc-ucsim`), it also runs the bootloader's disk code as
+compiled by SDCC in the HCS08 simulator and compares the results with the
+gcc build; this catches SDCC code generation and calling convention
+problems. It does not replace a test on real hardware.
 
-Use a BDM programmer, for example **USBDM** (open source, runs on Linux,
-cheap hardware such as the "USBDM JS16" clones). Use the HCS08 flash
-programmer, select the target **MC9S08JM60**, load `build/relay_cdc.s19`
-and program it. The image already contains NVOPT = 0x42 (unsecured) and
-NVPROT = 0xFF.
+Note: the bootloader is compiled with `--stack-auto`. SDCC has no
+stack-auto library for the s08, so the bootloader must not call library
+functions (`memset`, `memcpy`, ...); `boot/util.h` has replacements and
+`tools/checkmap.py --no-lib` fails the build if library code gets linked.
 
-The BDM connector is a 6-pin header (BKGD, GND, RESET, VDD). On most
-JM60 boards it is next to the MCU.
+## Memory layout (`src/layout.h`)
+
+| Range | Content |
+|---|---|
+| 0x1960-0xDBAF | application |
+| 0xDBB0-0xDBBF | application info block (magic, CRC16, version), written last |
+| 0xDBC0-0xDBFF | application vectors (hardware vector redirection) |
+| 0xDC00-0xFFFF | bootloader, write-protected (NVPROT 0xDA, NVOPT 0x42) |
+| 0xFFA0-0xFFA9 | serial number slot (8 bytes + CRC16), written at production |
+
+The bootloader owns the reset vector and starts after every reset. If the
+application is complete (info block present) and nobody asked for the
+bootloader, it jumps to the application at once, before touching clock or
+USB.
+
+## Programming with USBDM (new boards)
+
+```sh
+make flash            # bootloader + firmware (mass erase first)
+make flash-boot       # only the bootloader; then copy the firmware via USB
+```
+
+`FLASHPROG=<name>` selects another programmer executable. Mass erase also
+removes the flash protection of the bootloader area.
+
+The BDM connector is a 6-pin header (BKGD, GND, RESET, VDD).
+
+## Firmware update over USB (bootloader)
+
+1. Start the bootloader:
+   `python3 tools/relayctl.py bootloader` (or type `BOOTLOADER` in a terminal).
+   The board answers `OK`, disconnects and comes back as a USB drive
+   **RELAYBOOT**. The relays keep their state while the bootloader runs
+   (they are latching; the driver inputs are held at their inactive level).
+2. Copy `build/relay_fw-<version>.s19` onto the drive.
+   Desktop Linux mounts the drive with the `flush` option, so the data is
+   written as soon as the copy finishes. If you mounted it by hand, run `sync`.
+3. About one second after the last block, the board restarts with the new
+   firmware (`/dev/ttyACM*` appears again). The application then switches all
+   relays off, as after every power-up.
+
+Further details:
+
+- `INFO.TXT` on the drive shows the bootloader version, the installed
+  firmware version, the serial number and the result of the last update.
+  Eject and reconnect the drive to see the current state; the operating
+  system caches the directory.
+- Ejecting the drive without an update starts the installed firmware.
+- Without a complete firmware (new board, interrupted update, wrong or
+  damaged file), the bootloader stays active after every reset. Just copy
+  the file again.
+- Emergency entry: bridge **SDA (white) to GND (yellow)** on the JST
+  connector while plugging the board in.
+- Only firmware files from `make firmware` are accepted. The raw
+  `relay_cdc.s19` is rejected (`ERROR - wrong file`), because its vectors
+  are in the bootloader area.
+- How it works: the drive is an emulated FAT12 volume. All sectors written
+  to the data area are scanned for S-records; FAT and directory writes are
+  ignored. Each record is range-checked and programmed (the application
+  area is erased on the first record). After the end record, the CRC16
+  over the whole application area must match the info block, and only then
+  is the info block programmed. A power failure during the update therefore
+  leaves the bootloader active.
 
 ## Use
 
@@ -79,6 +145,7 @@ JM60 boards it is next to the MCU.
 sudo cp tools/99-relayboard.rules /etc/udev/rules.d/ && sudo udevadm control --reload
 python3 tools/relayctl.py on 3
 python3 tools/relayctl.py get          # -> STATE 04
+python3 tools/relayctl.py bootloader   # restart as USB drive for an update
 ```
 
 Or use a terminal program (`picocom /dev/relayboard`). Baud rate settings
@@ -92,6 +159,7 @@ are ignored.
 | `SET <hex>` – all relays at once from a bit mask | `OK` |
 | `GET` | `STATE hh` |
 | `ID` | `ID <product> FW <version>` |
+| `BOOTLOADER` | `OK`, then restart as USB drive `RELAYBOOT` |
 | `HELP` or `?` | command list |
 | anything invalid | `ERR <reason>`; an unknown command is echoed as `ERR command '<line>'` |
 

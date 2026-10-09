@@ -162,6 +162,9 @@ void host_delay_hook(uint16_t ms)
     }
 }
 
+static int reset_requested;
+void host_reset_hook(void) { reset_requested = 1; }
+
 static void expect_pulses(const char *want)
 {
     size_t l = strlen(pulse_log);
@@ -266,7 +269,7 @@ int main(void)
     expect_reply("ON 9\n", "ERR relay\r\n");
     expect_reply("FOO\n", "ERR command 'FOO'\r\n");
     expect_reply("\x1b[AX\n", "ERR command '<1B>[AX'\r\n");
-    expect_reply("IDX\x7f\n", "ID 6-Channel Relay Board FW 1.2\r\n");  /* backspace */
+    expect_reply("IDX\x7f\n", "ID 6-Channel Relay Board FW 1.3\r\n");  /* backspace */
     expect_reply("ON 2\nON 4\nGET\n", "OK\r\nOK\r\nSTATE 2A\r\n");
     expect_pulses("PE2 PE6");
     /* command split across two packets */
@@ -278,6 +281,18 @@ int main(void)
     expect_reply("PULSE PTA3\n", "ERR command 'PULSE PTA3'\r\n");
     expect_reply("SCAN\n", "ERR command 'SCAN'\r\n");
     expect_pulses("");
+
+    /* BOOTLOADER: OK, magic word in RAM, USB detached, reset */
+    expect_reply("BOOTLOADER\n", "OK\r\n");
+    CHECK(reset_requested && !memcmp(host_mem + BOOT_MAGIC_ADDR, "BOOT", 4) && USBCTL0 == 0,
+          "bootloader request");
+    memset(host_mem + BOOT_MAGIC_ADDR, 0, 4);
+    usb_init();                             /* back to normal for the rest */
+    bus_reset();
+    CHECK(control_write(0x00, 5, 7, 0, 0, 0) == 0, "set address again");
+    CHECK(control_write(0x00, 9, 1, 0, 0, 0) == 0, "set configuration again");
+    CHECK(control_write(0x21, 0x22, 3, 0, 0, 0) == 0, "DTR again");
+    ep2_toggle_host = ep3_toggle_host = 0;
 
     /* long output (>64 bytes) spans packets */
     send_cmd("HELP\n");

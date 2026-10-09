@@ -6,6 +6,7 @@ Examples:
     relayctl.py off all
     relayctl.py set 25          # relays 1,3,6 on, the others off
     relayctl.py get
+    relayctl.py bootloader      # restart as USB drive RELAYBOOT for an update
     relayctl.py --port /dev/ttyACM1 raw "TOGGLE 2"
 
 Requires pyserial (pip install pyserial).
@@ -30,7 +31,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--port", help="serial device (default: auto-detect by USB ID)")
-    ap.add_argument("command", help="on, off, toggle, set, get, id, raw")
+    ap.add_argument("command", help="on, off, toggle, set, get, id, bootloader, raw")
     ap.add_argument("args", nargs="*")
     a = ap.parse_args()
 

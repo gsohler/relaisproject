@@ -79,6 +79,16 @@
 #define USB_PRODUCT_STR      "6-Channel Relay Board"
 #define USB_SERIAL_STR       "0001"
 
+/* Bootloader: same VID/PID, other product string and bcdDevice. The host
+ * tells the two apart by the interface class (mass storage vs. CDC). */
+#define BOOT_PRODUCT_STR     "Relay Board Bootloader"
+#define BOOT_BCD_DEVICE      0x8000
+
+/* Relay driver pins the bootloader drives to their inactive level (low),
+ * so the relay drivers never see floating inputs while it runs. */
+#define BOOT_IDLE_PTE        0xF0   /* PTE4..PTE7 */
+#define BOOT_IDLE_PTF        0xFF   /* PTF0..PTF7 */
+
 /* Use the on-chip 3.3 V USB regulator and 1.5k D+ pull-up.
  * WARNING (AN3560): if your board feeds 3.3 V into VUSB33 externally,
  * USB_INTERNAL_VREG MUST be 0, otherwise the chip can be damaged. */
