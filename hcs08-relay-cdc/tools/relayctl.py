@@ -6,8 +6,6 @@ Examples:
     relayctl.py off all
     relayctl.py set 25          # relays 1,3,6 on, the others off
     relayctl.py get
-    relayctl.py pulse pte3      # debug: pulse one MCU pin for 100 ms
-    relayctl.py scan e          # debug: pulse PTE0..PTE7 one after another
     relayctl.py --port /dev/ttyACM1 raw "TOGGLE 2"
 
 Requires pyserial (pip install pyserial).
@@ -32,7 +30,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--port", help="serial device (default: auto-detect by USB ID)")
-    ap.add_argument("command", help="on, off, toggle, set, get, id, pulse, scan, raw")
+    ap.add_argument("command", help="on, off, toggle, set, get, id, raw")
     ap.add_argument("args", nargs="*")
     a = ap.parse_args()
 
@@ -46,24 +44,13 @@ def main():
     else:
         line = " ".join([cmd] + [x.upper() for x in a.args])
 
-    # opening the port asserts DTR, which the firmware needs to send replies
-    # Switching pulses take ~120 ms per relay, SCAN about 1.2 s per pin.
-    reply = ""
+    # opening the port asserts DTR, which the firmware needs to send replies.
+    # Switching pulses take ~120 ms per relay, so ON ALL needs ~0.7 s.
     with serial.Serial(port, 115200, timeout=3) as s:
         s.reset_input_buffer()
         s.write((line + "\n").encode("ascii"))
-        try:
-            while True:
-                reply = s.readline().decode("ascii", "replace").strip()
-                if not reply:
-                    break                       # timeout
-                print(reply, flush=True)
-                if not reply.startswith("SCAN P"):
-                    break                       # final answer
-        except KeyboardInterrupt:
-            s.write(b"STOP\n")                 # abort a running SCAN
-            print(s.readline().decode("ascii", "replace").strip())
-            reply = "ERR aborted"
+        reply = s.readline().decode("ascii", "replace").strip()
+    print(reply)
     sys.exit(0 if reply and not reply.startswith("ERR") else 1)
 
 

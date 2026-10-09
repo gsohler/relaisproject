@@ -11,41 +11,29 @@ Everything builds on Linux with SDCC, without CodeWarrior. The USB stack
 is small and self-contained (`src/usb_cdc.c`, about 600 lines, polled, no
 interrupts).
 
-## Finding the pin mapping
+## Pin mapping
 
-The ON/OFF inputs of the relays are not known yet. As shipped
-(`RELAY_MAP_VALID 0`), the firmware never drives any relay pin by itself.
-`ON`, `OFF`, `TOGGLE` and `SET` answer `ERR no pin map`. Two debug
-commands help you find the mapping:
+Measured on the real board (pulses active high), entered in `src/board.h`:
 
-```
-PULSE PTE3            pulse PTE3 high for 100 ms, then restore the pin
-PULSE E3 250 LOW      250 ms, low level (if the driver input is active low)
-SCAN E                pulse PTE0..PTE7 one after another, 1 s pause between
-SCAN                  all usable pins PTA0..PTG3
-STOP                  (or any other input) aborts a running SCAN
-```
+| Relay | ON | OFF |
+|---|---|---|
+| 1 | PTE7 | PTE6 |
+| 2 | PTE5 | PTE4 |
+| 3 | PTF7 | PTF6 |
+| 4 | PTF5 | PTF4 |
+| 5 | PTF3 | PTF2 |
+| 6 | PTF1 | PTF0 |
 
-`SCAN` prints `SCAN PTxn` before each pulse, so you can see which pin
-made which relay switch. Write down each relay's ON pin and OFF pin, then
-enter them in `RELAY_PINS` in `src/board.h`, set `RELAY_MAP_VALID` to 1
-and flash again.
-
-**Disconnect the 230 V loads while scanning.** The scan switches relays
-in an unpredictable order and pulses every pin, including pins that drive
-something else on the board. PTG4/PTG5 (crystal) are never touched. After
-`PULSE` and `SCAN`, each pin goes back to the direction and level it had
-before.
-
-If nothing reacts to a high pulse, try `SCAN E 100 LOW` because the driver
-inputs may be active low. In that case, also set `RELAY_ACTIVE_LOW 1`.
+The debug commands `PULSE` and `SCAN`, used to find this mapping, were
+removed in firmware 1.2. Version 1.1 still has them, if a different PCB
+ever needs to be mapped.
 
 ## Before flashing: adapt `src/board.h`
 
 | Setting | Meaning |
 |---|---|
-| `RELAY_PINS` | **Placeholder.** `{ ON pin, OFF pin }` per relay, written as `PIN(PE, 3)` for PTE3. |
-| `RELAY_MAP_VALID` | 0 until the mapping is entered, then 1. |
+| `RELAY_PINS` | `{ ON pin, OFF pin }` per relay, written as `PIN(PE, 3)` for PTE3. |
+| `RELAY_MAP_VALID` | 1 = mapping is valid. With 0 the firmware never drives a relay pin. |
 | `RELAY_PULSE_MS` / `RELAY_GAP_MS` | Pulse length (100 ms) and pause between two pulses (20 ms). |
 | `RELAY_OFF_AT_BOOT` | 1 = pulse all OFF inputs after power-up, so the firmware's state matches reality. |
 | `RELAY_ACTIVE_LOW` | Set to 1 if the pulse must be a low level. |
@@ -62,7 +50,7 @@ make                            # -> build/relay_cdc.s19
 make XTAL_MHZ=16                # other crystal
 make CODE_LOC=0x8000            # MC9S08JM32 (flash starts at 0x8000)
 make test                       # host-side unit test of USB stack + parser (gcc)
-make EXTRA_CFLAGS=-DRELAY_MAP_VALID=1   # override board.h settings
+make EXTRA_CFLAGS=-DRELAY_OFF_AT_BOOT=0  # override board.h settings
 ```
 
 Current size: about 5 KB flash and 0.5 KB RAM.
@@ -70,8 +58,8 @@ Current size: about 5 KB flash and 0.5 KB RAM.
 `make test` runs the USB stack and the command parser on the PC against
 a model of the JM60 buffer descriptors. It covers enumeration, SET_ADDRESS
 timing, the descriptor chain, ZLP handling, STALL recovery, endpoint halt,
-line coding, the relay commands and the exact pulse sequence on each pin
-(including PULSE/SCAN and aborting a scan). It does not replace a test on real
+line coding, the relay commands and the exact pulse sequence on each pin.
+It does not replace a test on real
 hardware.
 
 ## Flash
@@ -91,7 +79,6 @@ JM60 boards it is next to the MCU.
 sudo cp tools/99-relayboard.rules /etc/udev/rules.d/ && sudo udevadm control --reload
 python3 tools/relayctl.py on 3
 python3 tools/relayctl.py get          # -> STATE 04
-python3 tools/relayctl.py scan e       # debug, Ctrl+C aborts
 ```
 
 Or use a terminal program (`picocom /dev/relayboard`). Baud rate settings
@@ -104,11 +91,9 @@ are ignored.
 | `TOGGLE <n>` | `OK` |
 | `SET <hex>` – all relays at once from a bit mask | `OK` |
 | `GET` | `STATE hh` |
-| `PULSE <pin> [ms] [LOW\|HIGH]` | `OK` |
-| `SCAN [port\|ALL] [ms] [LOW\|HIGH]` | `SCAN PTxn` lines, then `OK` or `SCAN ABORTED` |
 | `ID` | `ID <product> FW <version>` |
 | `HELP` or `?` | command list |
-| anything invalid | `ERR <reason>` |
+| anything invalid | `ERR <reason>`; an unknown command is echoed as `ERR command '<line>'` |
 
 `SET` takes a hex bit mask where bit 0 is relay 1 and bit 5 is relay 6
 (00..3F). `SET 25` = binary 10 0101 turns relays 1, 3 and 6 on and 2, 4

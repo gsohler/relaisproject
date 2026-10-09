@@ -264,7 +264,9 @@ int main(void)
     expect_pulses("PF2");
     expect_reply("ON 7\n", "ERR relay\r\n");
     expect_reply("ON 9\n", "ERR relay\r\n");
-    expect_reply("FOO\n", "ERR command\r\n");
+    expect_reply("FOO\n", "ERR command 'FOO'\r\n");
+    expect_reply("\x1b[AX\n", "ERR command '<1B>[AX'\r\n");
+    expect_reply("IDX\x7f\n", "ID 6-Channel Relay Board FW 1.2\r\n");  /* backspace */
     expect_reply("ON 2\nON 4\nGET\n", "OK\r\nOK\r\nSTATE 2A\r\n");
     expect_pulses("PE2 PE6");
     /* command split across two packets */
@@ -272,31 +274,10 @@ int main(void)
     expect_reply("5\n", "OK\r\n");
     expect_pulses("PF0");
 
-    /* debug: PULSE restores the pin afterwards */
-    expect_reply("PULSE PTA3\n", "OK\r\n");
-    expect_pulses("PA3");
-    CHECK(PTADD == 0 && PTAD == 0, "PTA3 restored");
-    expect_reply("pulse b7 250\n", "OK\r\n");
-    expect_pulses("PB7:250");
-    PTCDD = 0x02; PTCD = 0x02;            /* pin already output high */
-    expect_reply("PULSE C1 LOW\n", "OK\r\n");
-    CHECK(PTCDD == 0x02 && PTCD == 0x02, "PTC1 restored");
-    PTCDD = 0; PTCD = 0; pulse_log[0] = 0;
-    expect_reply("PULSE G4\n", "ERR pin\r\n");   /* crystal pin */
-    expect_reply("PULSE C7\n", "ERR pin\r\n");   /* not bonded */
-    expect_reply("PULSE A3 0\n", "ERR args\r\n");
-    expect_reply("PULSE\n", "ERR pin\r\n");
+    /* debug commands are gone */
+    expect_reply("PULSE PTA3\n", "ERR command 'PULSE PTA3'\r\n");
+    expect_reply("SCAN\n", "ERR command 'SCAN'\r\n");
     expect_pulses("");
-
-    expect_reply("SCAN A\n", "SCAN PTA0\r\nSCAN PTA1\r\nSCAN PTA2\r\nSCAN PTA3\r\n"
-                             "SCAN PTA4\r\nSCAN PTA5\r\nOK\r\n");
-    expect_pulses("PA0 PA1 PA2 PA3 PA4 PA5");
-    expect_reply("SCAN G 30\n", "SCAN PTG0\r\nSCAN PTG1\r\nSCAN PTG2\r\nSCAN PTG3\r\nOK\r\n");
-    expect_pulses("PG0:30 PG1:30 PG2:30 PG3:30");
-    inject_on_pause = "STOP\n";
-    expect_reply("SCAN\n", "SCAN PTA0\r\nSCAN ABORTED\r\nOK\r\n");
-    expect_pulses("PA0");
-    CHECK(PTED == 0 && PTFD == 0 && PTEDD == 0xFF, "relay pins untouched by scan");
 
     /* long output (>64 bytes) spans packets */
     send_cmd("HELP\n");

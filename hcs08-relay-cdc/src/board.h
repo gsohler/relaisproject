@@ -1,9 +1,9 @@
 /*
  * board.h - Board-specific configuration.
  *
- * !!! ADAPT THIS FILE TO YOUR PCB !!!
- * The relay pin mapping below is a PLACEHOLDER. Find the ON and OFF input
- * of each relay with the PULSE/SCAN commands and fill in port and bit.
+ * The relay pin mapping below is the one of the 6-relay board (measured).
+ * For another PCB adapt RELAY_PINS. Firmware up to version 1.1 had the
+ * debug commands PULSE and SCAN to find such a mapping.
  */
 #ifndef BOARD_H
 #define BOARD_H
@@ -20,13 +20,11 @@
  * Each relay has an ON input and an OFF input (latching/bistable driver).
  * Switching = one pulse of RELAY_PULSE_MS on the ON or OFF pin.
  *
- * Use the PULSE and SCAN debug commands to find which MCU pin belongs to
- * which relay input, fill in RELAY_PINS and set RELAY_MAP_VALID to 1.
  * While RELAY_MAP_VALID is 0 the firmware never drives any relay pin by
  * itself; ON/OFF/SET answer "ERR no pin map".
  */
 #ifndef RELAY_MAP_VALID
-#define RELAY_MAP_VALID 0
+#define RELAY_MAP_VALID 1
 #endif
 
 #define RELAY_COUNT     6
@@ -34,8 +32,7 @@
 #define RELAY_GAP_MS    20      /* pause between two pulses */
 #define RELAY_OFF_AT_BOOT 1     /* pulse all OFF inputs after power-up */
 
-/* Set to 1 if the pulse is a LOW level (pin sinks the driver current).
- * Also the default level of the PULSE/SCAN debug commands. */
+/* Set to 1 if the pulse is a LOW level (pin sinks the driver current). */
 #ifndef RELAY_ACTIVE_LOW
 #define RELAY_ACTIVE_LOW 0
 #endif
@@ -50,15 +47,28 @@
 #define PG 6
 #define PIN(port, bit) ((uint8_t)(((port) << 4) | (bit)))
 
-/* { ON pin, OFF pin } for relay 1..6.  PLACEHOLDER - fill in after SCAN. */
+/* { ON pin, OFF pin } for relay 1..6, measured on the real board
+ * (pulses active high). */
+#ifdef HOST_TEST
+/* Fixed map for test/host_test.c, independent of the real board */
 #define RELAY_PINS {                  \
-    { PIN(PE, 0), PIN(PE, 1) }, /* R1 */ \
-    { PIN(PE, 2), PIN(PE, 3) }, /* R2 */ \
-    { PIN(PE, 4), PIN(PE, 5) }, /* R3 */ \
-    { PIN(PE, 6), PIN(PE, 7) }, /* R4 */ \
-    { PIN(PF, 0), PIN(PF, 1) }, /* R5 */ \
-    { PIN(PF, 2), PIN(PF, 3) }, /* R6 */ \
+    { PIN(PE, 0), PIN(PE, 1) },       \
+    { PIN(PE, 2), PIN(PE, 3) },       \
+    { PIN(PE, 4), PIN(PE, 5) },       \
+    { PIN(PE, 6), PIN(PE, 7) },       \
+    { PIN(PF, 0), PIN(PF, 1) },       \
+    { PIN(PF, 2), PIN(PF, 3) },       \
 }
+#else
+#define RELAY_PINS {                  \
+    { PIN(PE, 7), PIN(PE, 6) }, /* R1 */ \
+    { PIN(PE, 5), PIN(PE, 4) }, /* R2 */ \
+    { PIN(PF, 7), PIN(PF, 6) }, /* R3 */ \
+    { PIN(PF, 5), PIN(PF, 4) }, /* R4 */ \
+    { PIN(PF, 3), PIN(PF, 2) }, /* R5 */ \
+    { PIN(PF, 1), PIN(PF, 0) }, /* R6 */ \
+}
+#endif
 
 /* USB identity. 0x1209/0x0001 is the pid.codes TEST PID - fine for the lab,
  * request your own PID at https://pid.codes before selling devices. */

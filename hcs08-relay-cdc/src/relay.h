@@ -13,8 +13,4 @@ void    relay_switch(uint8_t idx, uint8_t on);
 void    relay_set_mask(uint8_t mask);
 uint8_t relay_get_mask(void);        /* state as last switched by firmware */
 
-/* Pin helpers for debugging. pin = (port << 4) | bit, port 0..6 = A..G */
-uint8_t pin_usable(uint8_t pin);
-void    pin_pulse(uint8_t pin, uint16_t ms, uint8_t active_low, uint8_t restore);
-
 #endif
