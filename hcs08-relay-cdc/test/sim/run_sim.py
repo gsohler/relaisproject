@@ -84,7 +84,7 @@ def main():
     run(["gcc", "-DHOST_TEST", "-I" + os.path.join(ROOT, "src"), "-I" + os.path.join(ROOT, "boot"),
          "-o", os.path.join(work, "host_image"), os.path.join(HERE, "host_image.c"),
          os.path.join(ROOT, "boot/disk.c"), os.path.join(ROOT, "boot/util.c"),
-         os.path.join(ROOT, "boot/flash.c")], cwd=work)
+         os.path.join(ROOT, "src/flash.c")], cwd=work)
     image = subprocess.run([os.path.join(work, "host_image")], capture_output=True).stdout
 
     fails = 0
@@ -104,7 +104,7 @@ def main():
 
     # 2. write the firmware file
     text = open(fw_path, "rb").read()
-    if len(text) > 0x2800 - 64:
+    if len(text) > 0x4000 - 64:
         sys.exit("run_sim: firmware file too large for the harness")
     p = os.path.join(work, "params.ihx")
     ihx(p, [(0x0C00, bytes([0, 0, 0xEE, 0, 1])), (0x8000, text + bytes(64))])

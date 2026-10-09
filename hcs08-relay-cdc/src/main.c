@@ -18,8 +18,9 @@
 #include "relay.h"
 #include "timer.h"
 #include "layout.h"
+#include "flash.h"
 
-#define FW_VERSION "1.3"
+#define FW_VERSION "1.4"
 
 /* NV option bytes, programmed together with the code.
  * NVOPT 0xFFBF: KEYEN=0, FNORED=1, SEC=10 (unsecured). NVPROT 0xFFBD: no protection. */
@@ -122,6 +123,15 @@ static uint8_t parse_target(char *p)
 }
 
 static void ok(void)            { cdc_puts("OK\r\n"); }
+
+/* After switching: store the new state in flash, then answer */
+static void ok_saved(void)
+{
+    if (relay_save())
+        cdc_puts("OK\r\n");
+    else
+        cdc_puts("ERR state not saved\r\n");
+}
 static void err(const char *s)  { cdc_puts("ERR "); cdc_puts(s); cdc_puts("\r\n"); }
 
 #ifdef HOST_TEST
@@ -164,12 +174,12 @@ static void execute(char *p)
         for (i = 0; i < RELAY_COUNT; i++)
             if (m & (1u << i))
                 relay_switch(i, on);    /* always pulse, even if state says so */
-        ok();
+        ok_saved();
     } else if ((a = match(p, "TOGGLE")) != 0) {
         if (!relay_map_valid()) { err("no pin map"); return; }
         if (!(m = parse_target(a))) { err("relay"); return; }
         relay_set_mask(relay_get_mask() ^ m);
-        ok();
+        ok_saved();
     } else if ((a = match(p, "SET")) != 0) {
         int8_t h = hexval(a[0]), l = hexval(a[1]);
         if (!relay_map_valid()) { err("no pin map"); return; }
@@ -181,7 +191,7 @@ static void execute(char *p)
         }
         if (m & (uint8_t)~RELAY_ALL) { err("mask"); return; }
         relay_set_mask(m);
-        ok();
+        ok_saved();
     } else if (match(p, "GET") || match(p, "STATE")) {
         cdc_puts("STATE ");
         put_hex8(relay_get_mask());
@@ -254,7 +264,8 @@ void main(void)
 
     clock_init();
     timer_init();
-    relay_init();               /* pulses all OFF inputs if the pin map is set */
+    flash_init();               /* flash clock, for the saved relay state */
+    relay_init();               /* relays to their saved state */
     usb_init();
 
     for (;;) {

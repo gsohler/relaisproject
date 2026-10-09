@@ -13,6 +13,7 @@ uint8_t host_mem[0x10000];
 
 #define main firmware_main
 #include "../src/main.c"
+#include "../src/nvstate.h"
 #include "../src/usb_desc.h"
 #undef main
 
@@ -162,6 +163,11 @@ void host_delay_hook(uint16_t ms)
     }
 }
 
+static uint8_t header_ok_test(uint16_t p)
+{
+    return host_mem[p] != 0xFF && (uint8_t)~host_mem[p] == host_mem[p + 1];
+}
+
 static int reset_requested;
 void host_reset_hook(void) { reset_requested = 1; }
 
@@ -201,7 +207,8 @@ int main(void)
     uint8_t buf[256];
     int n;
 
-    relay_init();                        /* pulses all OFF inputs */
+    memset(host_mem + 0x10B0, 0xFF, 0x1800 - 0x10B0);   /* erased flash block */
+    relay_init();                        /* nothing saved: all OFF */
     expect_pulses("PE1 PE3 PE5 PE7 PF1 PF3");
     CHECK(PTEDD == 0xFF && PTED == 0x00 && PTFDD == 0x0F, "relay init");
     usb_init();
@@ -269,7 +276,7 @@ int main(void)
     expect_reply("ON 9\n", "ERR relay\r\n");
     expect_reply("FOO\n", "ERR command 'FOO'\r\n");
     expect_reply("\x1b[AX\n", "ERR command '<1B>[AX'\r\n");
-    expect_reply("IDX\x7f\n", "ID 6-Channel Relay Board FW 1.3\r\n");  /* backspace */
+    expect_reply("IDX\x7f\n", "ID 6-Channel Relay Board FW 1.4\r\n");  /* backspace */
     expect_reply("ON 2\nON 4\nGET\n", "OK\r\nOK\r\nSTATE 2A\r\n");
     expect_pulses("PE2 PE6");
     /* command split across two packets */
@@ -325,6 +332,46 @@ int main(void)
     CHECK(control_read(0xA1, 0x55, 0, 0, 4, buf) == -2, "unknown class req stall");
     n = control_read(0x80, 0, 0, 0, 2, buf);
     CHECK(n == 2, "get status after stall");
+
+    /* ---- relay state in flash ---- */
+    expect_reply("SET 25\n", "OK\r\n");
+    pulse_log[0] = 0;
+    CHECK(nvstate_load() == 0x25, "saved state %02x", nvstate_load());
+    relay_init();                       /* "power cycle": restore 25 = R1, R3, R6 on */
+    expect_pulses("PE0 PE3 PE4 PE7 PF1 PF2");
+    CHECK(relay_get_mask() == 0x25, "restored mask");
+    expect_reply("GET\n", "STATE 25\r\n");
+    expect_reply("OFF 1\n", "OK\r\n");
+    pulse_log[0] = 0;
+    CHECK(nvstate_load() == 0x24, "OFF saved");
+    {
+        /* many changes: page switches, old page erased, last value wins */
+        int i, pages_ok = 1;
+        for (i = 0; i < 700; i++) {
+            uint8_t v = (uint8_t)(i % 64);
+            if (!nvstate_save(v) || nvstate_load() != v) pages_ok = 0;
+        }
+        CHECK(pages_ok, "700 saves");
+        uint8_t a = header_ok_test(NV_PAGE_A), b = header_ok_test(NV_PAGE_B);
+        CHECK(a + b == 1, "exactly one page active (a=%d b=%d)", a, b);
+        /* interrupted programming of the next entry: previous value stays */
+        uint8_t last = nvstate_load();
+        uint16_t pg = a ? NV_PAGE_A : NV_PAGE_B, off = 2;
+        while (host_mem[pg + off] != 0xFF || host_mem[pg + off + 1] != 0xFF) off += 2;
+        host_mem[pg + off] = 0x12;          /* value written, complement not */
+        CHECK(nvstate_load() == last, "damaged entry ignored");
+        CHECK(nvstate_save(0x07) && nvstate_load() == 0x07, "save after damaged entry");
+        /* both pages valid (power failed before the old page was erased) */
+        uint16_t other = pg == NV_PAGE_A ? NV_PAGE_B : NV_PAGE_A;
+        memset(host_mem + other, 0xFF, 512);
+        host_mem[other] = (uint8_t)(host_mem[pg] == 0 ? 254 : host_mem[pg] - 1);  /* older */
+        host_mem[other + 1] = (uint8_t)~host_mem[other];
+        host_mem[other + 2] = 0x3F; host_mem[other + 3] = 0xC0;
+        CHECK(nvstate_load() == 0x07, "newer page wins");
+        /* nothing saved after mass erase */
+        memset(host_mem + 0x10B0, 0xFF, 0x1800 - 0x10B0);
+        CHECK(nvstate_load() == 0, "erased -> 0");
+    }
 
     /* bus reset deconfigures */
     bus_reset();

@@ -1,10 +1,12 @@
 /*
  * relay.c - Latching relay driver: every relay has an ON and an OFF input
- * that is pulsed for RELAY_PULSE_MS.
+ * that is pulsed for RELAY_PULSE_MS. The state is kept in flash
+ * (nvstate.c) and restored after power-up.
  */
 #include "relay.h"
 #include "board.h"
 #include "timer.h"
+#include "nvstate.h"
 
 #define PIN_PORT(p) ((uint8_t)((p) >> 4))
 #define PIN_BIT(p)  ((uint8_t)((p) & 0x07))
@@ -46,7 +48,12 @@ uint8_t relay_map_valid(void)
 
 void relay_init(void)
 {
+    uint8_t saved = nvstate_load() & (uint8_t)((1u << RELAY_COUNT) - 1);
+
     state = 0;
+#if !RELAY_RESTORE_AT_BOOT
+    saved = 0;
+#endif
 #if RELAY_MAP_VALID
     {
         uint8_t i;
@@ -54,12 +61,18 @@ void relay_init(void)
             pin_idle_output(pins[i][0], RELAY_ACTIVE_LOW);
             pin_idle_output(pins[i][1], RELAY_ACTIVE_LOW);
         }
-#if RELAY_OFF_AT_BOOT
+        /* pulse every relay into its saved state, so firmware and relays agree */
         for (i = 0; i < RELAY_COUNT; i++)
-            relay_switch(i, 0);
-#endif
+            relay_switch(i, (saved >> i) & 1);
     }
+#else
+    (void)saved;
 #endif
+}
+
+uint8_t relay_save(void)
+{
+    return nvstate_save(state);
 }
 
 void relay_switch(uint8_t idx, uint8_t on)

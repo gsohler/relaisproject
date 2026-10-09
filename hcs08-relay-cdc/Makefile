@@ -23,8 +23,8 @@ PYTHON   ?= python3
 
 VERSION  := $(shell sed -n 's/^\#define FW_VERSION "\(.*\)"/\1/p' src/main.c)
 
-APP_SRCS  := src/main.c src/usb_cdc.c src/usb_desc.c src/relay.c src/timer.c
-BOOT_SRCS := boot/boot_main.c boot/usb_msc.c boot/disk.c boot/flash.c boot/util.c
+APP_SRCS  := src/main.c src/usb_cdc.c src/usb_desc.c src/relay.c src/timer.c src/flash.c src/nvstate.c
+BOOT_SRCS := boot/boot_main.c boot/usb_msc.c boot/disk.c src/flash.c boot/util.c
 
 APP_RAW   := $(BUILD)/relay_cdc.s19
 FIRMWARE  := $(BUILD)/relay_fw-$(VERSION).s19
@@ -46,7 +46,7 @@ BOOT_OPT  := --stack-auto
 COMMON    := -ms08 --std-sdcc11 --opt-code-size -DXTAL_MHZ=$(XTAL_MHZ) -Isrc $(EXTRA_CFLAGS)
 
 APP_OBJS  := $(patsubst src/%.c,$(BUILD)/app/%.rel,$(APP_SRCS))
-BOOT_OBJS := $(patsubst boot/%.c,$(BUILD)/boot/%.rel,$(BOOT_SRCS))
+BOOT_OBJS := $(patsubst %.c,$(BUILD)/boot/%.rel,$(notdir $(BOOT_SRCS)))
 
 all: firmware boot
 
@@ -67,7 +67,8 @@ $(FIRMWARE): $(APP_RAW) tools/mkfw.py
 	$(PYTHON) tools/mkfw.py $(APP_RAW) --version $(VERSION) -o $@
 
 # ---- bootloader ----
-$(BUILD)/boot/%.rel: boot/%.c boot/*.h src/*.h | $(BUILD)/boot
+vpath %.c boot src
+$(BUILD)/boot/%.rel: %.c boot/*.h src/*.h | $(BUILD)/boot
 	$(CC) $(COMMON) $(BOOT_OPT) -Iboot $(BOOT_MEM) -c $< -o $@
 
 $(BOOTLOADER): $(BOOT_OBJS)
@@ -90,10 +91,10 @@ HOSTCC := gcc -DHOST_TEST -DXTAL_MHZ=12 -Isrc -Wall -Wno-main -g -fsanitize=addr
 test: $(FIRMWARE)
 	mkdir -p $(BUILD)
 	$(HOSTCC) -DRELAY_MAP_VALID=1 -o $(BUILD)/host_test \
-	    test/host_test.c src/usb_cdc.c src/usb_desc.c src/relay.c src/timer.c
+	    test/host_test.c src/usb_cdc.c src/usb_desc.c src/relay.c src/timer.c src/flash.c src/nvstate.c
 	./$(BUILD)/host_test
 	$(HOSTCC) -Iboot -o $(BUILD)/boot_test \
-	    test/boot_test.c boot/usb_msc.c boot/disk.c boot/flash.c boot/util.c
+	    test/boot_test.c boot/usb_msc.c boot/disk.c src/flash.c boot/util.c
 	./$(BUILD)/boot_test $(FIRMWARE) $(APP_RAW)
 	@if command -v shc08 >/dev/null; then $(PYTHON) test/sim/run_sim.py $(FIRMWARE); \
 	 else echo "simulator test skipped (sudo apt install sdcc-ucsim)"; fi

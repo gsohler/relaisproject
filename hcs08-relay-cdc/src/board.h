@@ -30,7 +30,11 @@
 #define RELAY_COUNT     6
 #define RELAY_PULSE_MS  100     /* pulse length per ON/OFF signal */
 #define RELAY_GAP_MS    20      /* pause between two pulses */
-#define RELAY_OFF_AT_BOOT 1     /* pulse all OFF inputs after power-up */
+/* After power-up: 1 = restore the last state (saved in flash on every
+ * change), 0 = switch all relays off */
+#ifndef RELAY_RESTORE_AT_BOOT
+#define RELAY_RESTORE_AT_BOOT 1
+#endif
 
 /* Set to 1 if the pulse is a LOW level (pin sinks the driver current). */
 #ifndef RELAY_ACTIVE_LOW

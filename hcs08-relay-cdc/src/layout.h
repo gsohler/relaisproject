@@ -2,6 +2,7 @@
  * layout.h - Flash/RAM layout shared by the bootloader, the application,
  * the host tests and tools/mkfw.py (keep the numbers there in sync!).
  *
+ *   0x1200 .. 0x15FF  relay state log (application, nvstate.c), kept by updates
  *   0x1960 .. 0xDBAF  application code and constants
  *   0xDBB0 .. 0xDBBF  application info block (written last by the bootloader)
  *   0xDBC0 .. 0xDBFF  application vector table (hardware vector redirection)

@@ -6,7 +6,7 @@
  *
  * Memory used by the harness:
  *   0x8000..   firmware file text (loaded by run_sim.py), NUL terminated,
- *              max. 10 KiB; set to 0xFF after feeding, before the CRC check
+ *              max. 16 KiB; set to 0xFF after feeding, before the CRC check
  *   code at 0xE800, stack below it (outside the application area)
  *   0x0C00     LBA to read (16 bit)        0x0C02  result: disk_status()
  *   0x0C10..   512-byte sector buffer for disk_read()
@@ -53,7 +53,7 @@ void main(void)
             lba++;
         }
     }
-    for (pos = 0x8000u; pos != 0xA800u; pos++)     /* "erase" the text */
+    for (pos = 0x8000u; pos != 0xC000u; pos++)     /* "erase" the text */
         *HW_PTR(pos) = 0xFF;
     disk_write_end();
     SIM_STATUS = disk_status();

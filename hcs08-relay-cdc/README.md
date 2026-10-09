@@ -35,7 +35,7 @@ ever needs to be mapped.
 | `RELAY_PINS` | `{ ON pin, OFF pin }` per relay, written as `PIN(PE, 3)` for PTE3. |
 | `RELAY_MAP_VALID` | 1 = mapping is valid. With 0 the firmware never drives a relay pin. |
 | `RELAY_PULSE_MS` / `RELAY_GAP_MS` | Pulse length (100 ms) and pause between two pulses (20 ms). |
-| `RELAY_OFF_AT_BOOT` | 1 = pulse all OFF inputs after power-up, so the firmware's state matches reality. |
+| `RELAY_RESTORE_AT_BOOT` | 1 = after power-up, pulse every relay into its last saved state; 0 = all off. |
 | `RELAY_ACTIVE_LOW` | Set to 1 if the pulse must be a low level. |
 | `XTAL_MHZ` | Crystal on the board: 4, 8, 12 or 16 (also `make XTAL_MHZ=…`). Look at the part next to pins PTG4/PTG5. |
 | `USB_INTERNAL_VREG` | Keep at 1 unless the board supplies 3.3 V to VUSB33 externally. **If it does, set it to 0, otherwise the chip can be damaged.** |
@@ -49,7 +49,7 @@ sudo apt install sdcc make python3   # SDCC >= 4.0 with the s08 port
 make                  # firmware file + bootloader
 make test             # host tests: application and bootloader (gcc)
 make XTAL_MHZ=16      # other crystal
-make EXTRA_CFLAGS=-DRELAY_OFF_AT_BOOT=0  # override board.h settings
+make EXTRA_CFLAGS=-DRELAY_RESTORE_AT_BOOT=0  # override board.h settings
 ```
 
 | Output | Use |
@@ -113,8 +113,8 @@ The BDM connector is a 6-pin header (BKGD, GND, RESET, VDD).
    Desktop Linux mounts the drive with the `flush` option, so the data is
    written as soon as the copy finishes. If you mounted it by hand, run `sync`.
 3. About one second after the last block, the board restarts with the new
-   firmware (`/dev/ttyACM*` appears again). The application then switches all
-   relays off, as after every power-up.
+   firmware (`/dev/ttyACM*` appears again). The relays go back to their saved
+   state, as after every power-up.
 
 Further details:
 
@@ -176,8 +176,15 @@ Commands are case-insensitive and end with CR and/or LF. Replies are sent
 only while the host has the port open (DTR set). pyserial, picocom and
 Home Assistant all set DTR automatically.
 
-With `RELAY_OFF_AT_BOOT 1`, all relays are switched off after power-up.
-They keep their state when the host closes the port or re-enumerates.
+Relay state across power cycles: every `ON`, `OFF`, `TOGGLE` and `SET`
+stores the new state in flash (`src/nvstate.c`). After power-up each relay
+is pulsed into its saved state (the latching relays usually are in it
+already; the pulse makes sure firmware and relays agree). The state lives in
+the flash block 0x1200-0x15FF, outside the application area, so firmware
+updates keep it; only a USBDM mass erase clears it (then all relays start
+off). Two pages are used as a log: one byte pair per change, one page erase
+per 255 changes, about 5 million changes in total. If the flash write fails,
+the command answers `ERR state not saved` (the relay has switched anyway).
 
 ## Implementation notes
 
