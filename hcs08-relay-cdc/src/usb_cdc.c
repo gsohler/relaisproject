@@ -19,6 +19,7 @@
 #include "board.h"
 #include "usb_cdc.h"
 #include "usb_desc.h"
+#include "serial.h"
 
 #define BUF_EP0_OUT 0x1880
 #define BUF_EP0_IN  0x18A0
@@ -235,6 +236,11 @@ static uint8_t string_desc(uint8_t idx)
     if (idx >= USB_NUM_STRINGS)
         return 0;
     s = usb_strings[idx];
+    if (!s) {                       /* serial number from the flash slot */
+        static __xdata char ser[SERIAL_STR_LEN + 1];
+        serial_get(ser);
+        s = ser;
+    }
     while (*s && n < sizeof(ep0_scratch) - 1) {
         ep0_scratch[n++] = (uint8_t)*s++;
         ep0_scratch[n++] = 0;

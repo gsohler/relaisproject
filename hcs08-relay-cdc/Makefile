@@ -6,6 +6,7 @@
 #   make combined       build/relay_combined-<version>.s19 (bootloader + firmware)
 #   make flash          program bootloader + firmware with USBDM (new boards)
 #   make flash-boot     program only the bootloader with USBDM
+#   make production     new boards: bootloader + firmware + random serial number
 #   make test           host tests (gcc) + bootloader code in the HCS08 simulator
 #   make clean
 #
@@ -23,7 +24,7 @@ PYTHON   ?= python3
 
 VERSION  := $(shell sed -n 's/^\#define FW_VERSION "\(.*\)"/\1/p' src/main.c)
 
-APP_SRCS  := src/main.c src/usb_cdc.c src/usb_desc.c src/relay.c src/timer.c src/flash.c src/nvstate.c
+APP_SRCS  := src/main.c src/usb_cdc.c src/usb_desc.c src/relay.c src/timer.c src/flash.c src/nvstate.c src/serial.c
 BOOT_SRCS := boot/boot_main.c boot/usb_msc.c boot/disk.c src/flash.c boot/util.c
 
 APP_RAW   := $(BUILD)/relay_cdc.s19
@@ -91,7 +92,7 @@ HOSTCC := gcc -DHOST_TEST -DXTAL_MHZ=12 -Isrc -Wall -Wno-main -g -fsanitize=addr
 test: $(FIRMWARE)
 	mkdir -p $(BUILD)
 	$(HOSTCC) -DRELAY_MAP_VALID=1 -o $(BUILD)/host_test \
-	    test/host_test.c src/usb_cdc.c src/usb_desc.c src/relay.c src/timer.c src/flash.c src/nvstate.c
+	    test/host_test.c src/usb_cdc.c src/usb_desc.c src/relay.c src/timer.c src/flash.c src/nvstate.c src/serial.c
 	./$(BUILD)/host_test
 	$(HOSTCC) -Iboot -o $(BUILD)/boot_test \
 	    test/boot_test.c boot/usb_msc.c boot/disk.c src/flash.c boot/util.c
@@ -111,4 +112,8 @@ flash: $(COMBINED)
 flash-boot: $(BOOTLOADER)
 	$(USBDM) $(BOOTLOADER)
 
-.PHONY: all firmware boot combined clean test flash flash-boot
+# Production: random serial number per board, programmed with USBDM, logged
+production: $(COMBINED)
+	$(PYTHON) tools/production.py --image $(COMBINED) --flashprog "$(FLASHPROG)"
+
+.PHONY: all firmware boot combined clean test flash flash-boot production

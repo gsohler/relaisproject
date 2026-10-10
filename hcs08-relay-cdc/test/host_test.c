@@ -276,7 +276,7 @@ int main(void)
     expect_reply("ON 9\n", "ERR relay\r\n");
     expect_reply("FOO\n", "ERR command 'FOO'\r\n");
     expect_reply("\x1b[AX\n", "ERR command '<1B>[AX'\r\n");
-    expect_reply("IDX\x7f\n", "ID 6-Channel Relay Board FW 1.4\r\n");  /* backspace */
+    expect_reply("IDX\x7f\n", "ID 6-Channel Relay Board FW 1.5 SN NOSERIAL\r\n");  /* backspace */
     expect_reply("ON 2\nON 4\nGET\n", "OK\r\nOK\r\nSTATE 2A\r\n");
     expect_pulses("PE2 PE6");
     /* command split across two packets */
@@ -332,6 +332,26 @@ int main(void)
     CHECK(control_read(0xA1, 0x55, 0, 0, 4, buf) == -2, "unknown class req stall");
     n = control_read(0x80, 0, 0, 0, 2, buf);
     CHECK(n == 2, "get status after stall");
+
+    /* ---- serial number (slot in the bootloader area) ---- */
+    memset(host_mem + SERIAL_ADDR, 0xFF, 10);
+    expect_reply("SERIAL\n", "ERR no serial\r\n");
+    n = control_read(0x80, 6, 0x0303, 0x0409, 255, buf);
+    CHECK(n == 2 + 2 * 8 && buf[2] == 'N', "USB serial NOSERIAL n=%d", n);
+    {
+        /* CRC 0x904C computed by tools/mkfw.py crc16() - cross-checks C and Python */
+        static const uint8_t slot[10] = { 0x3F, 0x9A, 0x07, 0xC2, 0xD4, 0x1B, 0x88, 0xE5, 0x90, 0x4C };
+        memcpy(host_mem + SERIAL_ADDR, slot, 10);
+        expect_reply("SERIAL\n", "SERIAL 3F9A07C2D41B88E5\r\n");
+        expect_reply("ID\n", "ID 6-Channel Relay Board FW 1.5 SN 3F9A07C2D41B88E5\r\n");
+        n = control_read(0x80, 6, 0x0303, 0x0409, 255, buf);
+        char sn[17] = { 0 };
+        for (int k = 0; k < 16; k++) sn[k] = (char)buf[2 + 2 * k];
+        CHECK(n == 34 && !strcmp(sn, "3F9A07C2D41B88E5"), "USB serial '%s'", sn);
+        host_mem[SERIAL_ADDR + 9] ^= 1;            /* damaged CRC */
+        expect_reply("SERIAL\n", "ERR no serial\r\n");
+        memset(host_mem + SERIAL_ADDR, 0, 10);
+    }
 
     /* ---- relay state in flash ---- */
     expect_reply("SET 25\n", "OK\r\n");

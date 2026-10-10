@@ -102,6 +102,34 @@ removes the flash protection of the bootloader area.
 
 The BDM connector is a 6-pin header (BKGD, GND, RESET, VDD).
 
+## Production: serial numbers
+
+```sh
+make production          # one board after another, Ctrl+C to stop
+```
+
+For each board `tools/production.py`:
+1. generates a random 64-bit serial number on the PC (`os.urandom`) and
+   checks it against `production_log.csv` (no duplicates),
+2. writes it with a CRC16 into the image at 0xFFA0, inside the
+   write-protected bootloader area (firmware updates never change it),
+3. programs the board with USBDM (mass erase first),
+4. waits until the board appears on USB with this serial number and
+   answers `SERIAL <number>`,
+5. only then appends the number to the log.
+
+The number is random on purpose: it reveals nothing about production
+volume. 64 bit makes collisions practically impossible, and the log
+catches them anyway. Keep `production_log.csv` (and a backup of it).
+
+The serial number shows up as USB serial number (stable names under
+`/dev/serial/by-id/`, relay names in the gateway), in `ID`, with `SERIAL`
+and in `INFO.TXT` of the bootloader. Without a number (board programmed
+with `make flash`) it reads `NOSERIAL` and `SERIAL` answers `ERR no serial`.
+A board can only get a number with USBDM, not over the bootloader.
+
+`--dry-run` only writes the per-board image files to `build/production/`.
+
 ## Firmware update over USB (bootloader)
 
 1. Start the bootloader:
@@ -158,7 +186,8 @@ are ignored.
 | `TOGGLE <n>` | `OK` |
 | `SET <hex>` – all relays at once from a bit mask | `OK` |
 | `GET` | `STATE hh` |
-| `ID` | `ID <product> FW <version>` |
+| `ID` | `ID <product> FW <version> SN <serial>` |
+| `SERIAL` | `SERIAL <16 hex digits>` or `ERR no serial` |
 | `BOOTLOADER` | `OK`, then restart as USB drive `RELAYBOOT` |
 | `HELP` or `?` | command list |
 | anything invalid | `ERR <reason>`; an unknown command is echoed as `ERR command '<line>'` |

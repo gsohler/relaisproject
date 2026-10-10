@@ -81,7 +81,6 @@
 #define USB_BCD_DEVICE 0x0100
 #define USB_MANUFACTURER_STR "Open Relay Project"
 #define USB_PRODUCT_STR      "6-Channel Relay Board"
-#define USB_SERIAL_STR       "0001"
 
 /* Bootloader: same VID/PID, other product string and bcdDevice. The host
  * tells the two apart by the interface class (mass storage vs. CDC). */

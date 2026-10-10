@@ -15,27 +15,12 @@ from the original plan:
   "CRC fallback" needed: an incomplete update never gets an info block).
 - Still to verify on real hardware: Windows and macOS hosts, update time.
 
-## 2. Serial number (stored in the bootloader area)
+## 2. Serial number - DONE (firmware 1.5, tools/production.py)
 
-- Fixed address inside the protected bootloader flash, survives every
-  application update: 0xFFA0-0xFFA7 serial, 0xFFA8-0xFFA9 CRC16
-  (CCITT-FALSE). The bootloader already reads it (USB serial string,
-  INFO.TXT); the production script that patches it into the bootloader
-  S19 and the application side (`SERIAL`) are still open. The JM60 has no unique ID, so the number is assigned.
-- RANDOM, not sequential (no conclusions about production volume).
-  64 bit, so collisions are negligible even for many thousands of boards
-  (32 bit would give ~0.3 % collision chance at 5000 boards).
-- Generated ONLY on the PC: the production script takes os.urandom(8),
-  patches it into the bootloader S19 and programs it with USBDM. No
-  on-device generation (silent failures would go unnoticed).
-- The script keeps a log (CSV: serial, date, firmware version) and refuses
-  a duplicate, so the PC side is checked too.
-- Stored with a checksum; never rewritten. If the field is erased or the
-  checksum is wrong, `SERIAL` answers `ERR no serial` and the USB serial
-  string shows `NOSERIAL`, so a missing number is immediately visible.
-- Used as USB iSerialNumber (stable /dev/serial/by-id names, Home Assistant),
-  readable via CDC command `SERIAL` (and in `ID`), shown in `INFO.TXT`.
-- Format: 16 hex digits, e.g. `SERIAL 3F9A07C2D41B88E5`.
+See README "Production: serial numbers". Random 64-bit number generated on
+the PC, CRC16, slot 0xFFA0 in the protected bootloader area, CSV log with
+duplicate check, USB check after programming. Shown as USB serial number,
+in `ID`, `SERIAL` and `INFO.TXT`.
 
 ## 3. Current measurement (ACS712ELCTR-20A per relay, 6 per board)
 

@@ -62,5 +62,5 @@ const char * const usb_strings[USB_NUM_STRINGS] = {
     0,                      /* index 0 is the language ID list */
     USB_MANUFACTURER_STR,
     USB_PRODUCT_STR,
-    USB_SERIAL_STR,
+    0,                      /* serial number: read from flash, see serial.c */
 };

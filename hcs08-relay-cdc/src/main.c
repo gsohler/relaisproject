@@ -7,7 +7,8 @@
  *   TOGGLE <n>       toggle relay n
  *   SET <hh>         set all relays from a hex bit mask (bit0 = relay 1, 00..3F)
  *   GET              -> "STATE hh"
- *   ID               -> identification string
+ *   ID               -> identification string, incl. serial number
+ *   SERIAL           -> "SERIAL <16 hex digits>" or "ERR no serial"
  *   HELP or ?        -> command list
  *   BOOTLOADER       -> "OK", then the board restarts as USB drive (bootloader)
  * Every command answers "OK", "STATE hh", "ID ..." or "ERR <reason>".
@@ -19,8 +20,9 @@
 #include "timer.h"
 #include "layout.h"
 #include "flash.h"
+#include "serial.h"
 
-#define FW_VERSION "1.4"
+#define FW_VERSION "1.5"
 
 /* NV option bytes, programmed together with the code.
  * NVOPT 0xFFBF: KEYEN=0, FNORED=1, SEC=10 (unsecured). NVPROT 0xFFBD: no protection. */
@@ -197,11 +199,24 @@ static void execute(char *p)
         put_hex8(relay_get_mask());
         cdc_puts("\r\n");
     } else if (match(p, "ID")) {
-        cdc_puts("ID " USB_PRODUCT_STR " FW " FW_VERSION "\r\n");
+        static __xdata char ser[SERIAL_STR_LEN + 1];
+        serial_get(ser);
+        cdc_puts("ID " USB_PRODUCT_STR " FW " FW_VERSION " SN ");
+        cdc_puts(ser);
+        cdc_puts("\r\n");
+    } else if (match(p, "SERIAL")) {
+        static __xdata char ser[SERIAL_STR_LEN + 1];
+        if (serial_get(ser)) {
+            cdc_puts("SERIAL ");
+            cdc_puts(ser);
+            cdc_puts("\r\n");
+        } else {
+            err("no serial");
+        }
     } else if (match(p, "BOOTLOADER")) {
         enter_bootloader();
     } else if (match(p, "HELP") || match(p, "?")) {
-        cdc_puts("ON <n|ALL>, OFF <n|ALL>, TOGGLE <n>, SET <hex>, GET, ID, BOOTLOADER\r\n");
+        cdc_puts("ON <n|ALL>, OFF <n|ALL>, TOGGLE <n>, SET <hex>, GET, ID, SERIAL, BOOTLOADER\r\n");
     } else {
         /* Echo what was received, so wrong line endings or stray bytes
          * (backspace, escape sequences) can be seen. Non-printable bytes
