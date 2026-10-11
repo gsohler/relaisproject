@@ -7,6 +7,8 @@ Examples:
     relayctl.py set 25          # relays 1,3,6 on, the others off
     relayctl.py get
     relayctl.py bootloader      # restart as USB drive RELAYBOOT for an update
+    relayctl.py current         # 50 Hz current per output in A
+    relayctl.py adc             # debug: all ADC inputs (to find the sensor channels)
     relayctl.py --port /dev/ttyACM1 raw "TOGGLE 2"
 
 Requires pyserial (pip install pyserial).
@@ -47,11 +49,15 @@ def main():
 
     # opening the port asserts DTR, which the firmware needs to send replies.
     # Switching pulses take ~120 ms per relay, so ON ALL needs ~0.7 s.
+    # The ADC report has several "ADC ..." lines, then "OK".
     with serial.Serial(port, 115200, timeout=3) as s:
         s.reset_input_buffer()
         s.write((line + "\n").encode("ascii"))
-        reply = s.readline().decode("ascii", "replace").strip()
-    print(reply)
+        while True:
+            reply = s.readline().decode("ascii", "replace").strip()
+            print(reply)
+            if not reply.startswith("ADC "):
+                break
     sys.exit(0 if reply and not reply.startswith("ERR") else 1)
 
 

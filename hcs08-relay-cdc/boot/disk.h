@@ -29,6 +29,9 @@ void    disk_write(uint16_t lba, uint16_t offset, const uint8_t *data, uint8_t n
 void    disk_write_end(void);       /* after each WRITE command */
 uint8_t disk_status(void);
 
+/* Why the bootloader is active (decide.h BOOT_*), shown in INFO.TXT */
+void    disk_set_reason(uint8_t reason);
+
 /* Application present and complete (info block valid) */
 uint8_t app_valid(void);
 

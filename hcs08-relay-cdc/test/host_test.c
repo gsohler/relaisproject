@@ -14,6 +14,35 @@ uint8_t host_mem[0x10000];
 #define main firmware_main
 #include "../src/main.c"
 #include "../src/nvstate.h"
+#include "../src/current.h"
+#include <math.h>
+
+/* ---- ADC model: per channel a 50 Hz current (A rms), phase, harmonic,
+ * noise; sampled at the simulated time in ms ---- */
+static double sim_ms;
+static double cur_a[16], cur_ph[16], cur_h3[16], cur_noise[16], cur_hz[16];
+static uint16_t adc_fixed[32];
+uint16_t host_adc(uint8_t ch)
+{
+    if (ch >= 16)
+        return adc_fixed[ch & 31];
+    double lsb_a = CURRENT_UA_PER_LSB / 1e6;            /* A per step */
+    double f = cur_hz[ch] ? cur_hz[ch] : 50.0, w = 2 * M_PI * f * sim_ms / 1000.0;
+    double i = cur_a[ch] * sqrt(2) * (sin(w + cur_ph[ch]) + cur_h3[ch] * sin(3 * w));
+    double v = 2040 + i / lsb_a + cur_noise[ch] * ((rand() % 2001) / 1000.0 - 1.0);
+    if (v < 0) v = 0;
+    if (v > 4095) v = 4095;
+    return (uint16_t)lround(v);
+}
+
+static void run_window(void)
+{
+    for (int k = 0; k < CURRENT_SAMPLES; k++) {
+        current_isr();
+        sim_ms += 1.0;
+    }
+    current_task();
+}
 #include "../src/usb_desc.h"
 #undef main
 
@@ -138,8 +167,23 @@ static char pulse_log[1024];
 static const char *inject_on_pause;     /* sent as bulk OUT during a >=1000 ms pause */
 static int ep2_toggle_host;
 
+static char capture[4096];
+static int capture_len, capturing;
+
 void host_delay_hook(uint16_t ms)
 {
+    sim_ms += ms;
+    if (capturing) {                    /* host keeps reading during long commands */
+        int d1, n;
+        usb_poll();
+        n = in_token(3, (uint8_t *)capture + capture_len, &d1);
+        if (n > 0 && capture_len + n < (int)sizeof(capture) - 64) {
+            capture_len += n;
+            ep3_toggle_host ^= 1;
+        } else if (n == 0) {
+            ep3_toggle_host ^= 1;
+        }
+    }
     for (int port = 0; port < 7; port++) {
         uint8_t act = host_mem[port * 2] & host_mem[port * 2 + 1];
         for (int bit = 0; bit < 8; bit++) {
@@ -276,7 +320,7 @@ int main(void)
     expect_reply("ON 9\n", "ERR relay\r\n");
     expect_reply("FOO\n", "ERR command 'FOO'\r\n");
     expect_reply("\x1b[AX\n", "ERR command '<1B>[AX'\r\n");
-    expect_reply("IDX\x7f\n", "ID 6-Channel Relay Board FW 1.5 SN NOSERIAL\r\n");  /* backspace */
+    expect_reply("IDX\x7f\n", "ID 6-Channel Relay Board FW 1.8 SN NOSERIAL\r\n");  /* backspace */
     expect_reply("ON 2\nON 4\nGET\n", "OK\r\nOK\r\nSTATE 2A\r\n");
     expect_pulses("PE2 PE6");
     /* command split across two packets */
@@ -343,7 +387,7 @@ int main(void)
         static const uint8_t slot[10] = { 0x3F, 0x9A, 0x07, 0xC2, 0xD4, 0x1B, 0x88, 0xE5, 0x90, 0x4C };
         memcpy(host_mem + SERIAL_ADDR, slot, 10);
         expect_reply("SERIAL\n", "SERIAL 3F9A07C2D41B88E5\r\n");
-        expect_reply("ID\n", "ID 6-Channel Relay Board FW 1.5 SN 3F9A07C2D41B88E5\r\n");
+        expect_reply("ID\n", "ID 6-Channel Relay Board FW 1.8 SN 3F9A07C2D41B88E5\r\n");
         n = control_read(0x80, 6, 0x0303, 0x0409, 255, buf);
         char sn[17] = { 0 };
         for (int k = 0; k < 16; k++) sn[k] = (char)buf[2 + 2 * k];
@@ -391,6 +435,74 @@ int main(void)
         /* nothing saved after mass erase */
         memset(host_mem + 0x10B0, 0xFF, 0x1800 - 0x10B0);
         CHECK(nvstate_load() == 0, "erased -> 0");
+    }
+
+    /* ---- current measurement ---- */
+    {
+        uint16_t i50, irms;
+        /* constant used in current.c */
+        {
+            double P = 0;
+            for (int k = 0; k < 20; k++)
+                P += round(127 * cos(2 * M_PI * k / 20)) * cos(2 * M_PI * k / 20);
+            CHECK(fabs(P * CURRENT_SAMPLES / 20 * sqrt(2) * 2032 / 512 - 35701) < 1, "RMS50_DIV constant");
+        }
+
+        current_init();
+        CHECK(!current_get(0, &i50, &irms), "no data before the first window");
+        expect_reply("CURRENT\n", "ERR no data yet\r\n");
+        cur_a[0] = 1.0;                                 /* 1 A */
+        cur_a[1] = 5.0; cur_h3[1] = 0.3;                /* 5 A + 30 % 3rd harmonic */
+        cur_noise[2] = 3;                               /* no load, noise */
+        cur_a[3] = 10.0; cur_ph[3] = 1.0;               /* 10 A, other phase */
+        cur_a[4] = 2.0; cur_hz[4] = 49.8;               /* mains frequency off */
+        cur_a[5] = 14.0;                                /* near full scale */
+        run_window();
+        static const double want50[6] = { 1.0, 5.0, 0.0, 10.0, 2.0, 14.0 };
+        for (int c = 0; c < 6; c++) {
+            CHECK(current_get(c, &i50, &irms), "data ch %d", c);
+            double tol = want50[c] * 0.01 + 0.03;
+            CHECK(fabs(i50 / 1000.0 - want50[c]) <= tol, "ch %d: 50 Hz %.3f A, want %.3f",
+                  c, i50 / 1000.0, want50[c]);
+        }
+        current_get(1, &i50, &irms);
+        CHECK(fabs(irms / 1000.0 - 5.0 * sqrt(1.09)) < 0.06, "true RMS with harmonic %.3f", irms / 1000.0);
+        current_get(2, &i50, &irms);
+        CHECK(i50 < 30 && irms < 40, "noise only: 50 Hz %u mA, rms %u mA", i50, irms);
+        expect_reply("CURRENT\n", "CURRENT 1:1.00 2:5.00 3:0.00 4:10.00 5:2.00 6:14.00\r\n");
+        {
+            char rx[256];
+            send_cmd("CURRENT RMS\n");
+            bulk_rx(rx);
+            CHECK(!strncmp(rx, "CURRENT 1:1.00 2:5.2", 20), "CURRENT RMS '%s'", rx);
+        }
+        expect_reply("CURRENT X\n", "ERR args\r\n");
+
+        /* a flash write in the middle restarts the window */
+        for (int k = 0; k < 50; k++) { current_isr(); sim_ms += 1; }
+        current_pause();
+        current_resume();
+        current_task();                                 /* not complete: nothing */
+        cur_a[0] = 3.0;
+        run_window();
+        current_get(0, &i50, &irms);
+        CHECK(fabs(i50 / 1000.0 - 3.0) < 0.05, "after restart %.3f", i50 / 1000.0);
+
+        /* ADC debug report */
+        adc_fixed[ADC_CH_BANDGAP] = 983;                /* 1.2 V at VDD 5 V */
+        {
+            char rx[1024];
+            capture_len = 0;
+            capturing = 1;
+            send_cmd("ADC\n");
+            capturing = 0;
+            bulk_rx(rx);
+            strcat(capture, rx);
+            CHECK(strstr(capture, "ADC 0 mean 20") && strstr(capture, "ADC 11 mean") &&
+                  strstr(capture, "ADC VDD 5000 mV") && strstr(capture, "OK\r\n"),
+                  "ADC report '%s'", capture);
+        }
+        pulse_log[0] = 0;
     }
 
     /* bus reset deconfigures */

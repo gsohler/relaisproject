@@ -200,25 +200,25 @@ static esp_err_t cmd_post(httpd_req_t *req)
         for (char *p = cmd; *p; p++) {
             *p = toupper((unsigned char)*p);
         }
-        if (strncmp(cmd, "SCAN", 4) == 0) {
-            /* runs for up to a minute on the board - use USB directly */
+        if (strncmp(cmd, "BOOTLOADER", 10) == 0) {
+            /* the board would turn into a USB drive the gateway cannot use */
             cJSON_AddBoolToObject(out, "ok", false);
-            cJSON_AddStringToObject(out, "reply", "SCAN only via direct USB connection");
-        } else {
-            /* ON ALL / SET pulse up to 8 relays (~1 s), PULSE up to 10 s */
-            uint32_t timeout = strncmp(cmd, "PULSE", 5) == 0 ? 11000 : 3000;
-            char reply[80];
-            esp_err_t err = usb_boards_command((uint8_t)jaddr->valueint, cmd,
-                                               reply, sizeof(reply), timeout);
-            bool ok = err == ESP_OK && strncmp(reply, "ERR", 3) != 0;
-            if (err == ESP_OK && (strncmp(cmd, "ON", 2) == 0 || strncmp(cmd, "OFF", 3) == 0 ||
-                                  strncmp(cmd, "SET", 3) == 0 || strncmp(cmd, "TOGGLE", 6) == 0)) {
-                char st[32];   /* refresh cached state right away */
-                usb_boards_command((uint8_t)jaddr->valueint, "GET", st, sizeof(st), 1500);
-            }
-            cJSON_AddBoolToObject(out, "ok", ok);
-            cJSON_AddStringToObject(out, "reply", err == ESP_OK ? reply : esp_err_to_name(err));
+            cJSON_AddStringToObject(out, "reply", "BOOTLOADER only via direct USB connection");
+            cJSON_Delete(in);
+            return send_json(req, out);
         }
+        /* ON ALL / SET pulse up to 6 relays, about 0.7 s */
+        char reply[80];
+        esp_err_t err = usb_boards_command((uint8_t)jaddr->valueint, cmd,
+                                           reply, sizeof(reply), 3000);
+        bool ok = err == ESP_OK && strncmp(reply, "ERR", 3) != 0;
+        if (err == ESP_OK && (strncmp(cmd, "ON", 2) == 0 || strncmp(cmd, "OFF", 3) == 0 ||
+                              strncmp(cmd, "SET", 3) == 0 || strncmp(cmd, "TOGGLE", 6) == 0)) {
+            char st[32];   /* refresh cached state right away */
+            usb_boards_command((uint8_t)jaddr->valueint, "GET", st, sizeof(st), 1500);
+        }
+        cJSON_AddBoolToObject(out, "ok", ok);
+        cJSON_AddStringToObject(out, "reply", err == ESP_OK ? reply : esp_err_to_name(err));
     }
     cJSON_Delete(in);
     return send_json(req, out);

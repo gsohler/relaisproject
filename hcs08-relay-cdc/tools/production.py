@@ -15,6 +15,8 @@ For every board:
     python3 tools/production.py                  # one board after another
     python3 tools/production.py --count 1        # just one board
     python3 tools/production.py --dry-run        # only write the image file
+    python3 tools/production.py --serial 3F9A07C2D41B88E5
+                                                 # reprogram a board, keep its number
 
 Needs: make combined (build/relay_combined-<version>.s19), USBDM, pyserial
 for the USB check (pip install pyserial).
@@ -40,7 +42,7 @@ def load_log(path):
     if not os.path.exists(path):
         return set()
     with open(path, newline="") as f:
-        return {row["serial"].upper() for row in csv.DictReader(f)}
+        return {row["serial"].split()[0].upper() for row in csv.DictReader(f) if row["serial"]}
 
 
 def append_log(path, serial, image, verified):
@@ -128,6 +130,8 @@ def main():
     ap.add_argument("--outdir", default="build/production", help="per-board image files")
     ap.add_argument("--no-usb-check", action="store_true")
     ap.add_argument("--dry-run", action="store_true", help="only write the image, no programming")
+    ap.add_argument("--serial", help="reprogram one board with this existing serial number "
+                                     "(must be in the log), e.g. for a bootloader update")
     a = ap.parse_args()
 
     image = a.image or default_image()
@@ -143,7 +147,15 @@ def main():
             if not a.dry_run:
                 input("\nConnect board %d (USB power + USBDM), then press Enter "
                       "(Ctrl+C to stop) " % (done + 1))
-            raw, serial = new_serial(used)
+            if a.serial:
+                serial = a.serial.upper()
+                if serial not in used:
+                    sys.exit("production: %s is not in %s - refusing to invent a number"
+                             % (serial, a.log))
+                raw = bytes.fromhex(serial)
+                a.count = 1
+            else:
+                raw, serial = new_serial(used)
             out = os.path.join(a.outdir, "relay_%s.s19" % serial)
             patch_image(image, raw, out)
             print("  serial %s -> %s" % (serial, out))
@@ -157,7 +169,7 @@ def main():
             if verified is False:
                 print("  board NOT logged - check it and run again")
                 continue
-            append_log(a.log, serial, image, verified)
+            append_log(a.log, serial + (" (reprogrammed)" if a.serial else ""), image, verified)
             used.add(serial)
             os.remove(out)
             done += 1

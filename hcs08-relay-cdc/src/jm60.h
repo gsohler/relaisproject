@@ -14,6 +14,8 @@
 extern uint8_t host_mem[0x10000];
 #define HW_PTR(a) ((volatile uint8_t *)(host_mem + (uint16_t)(a)))
 #define __xdata                 /* SDCC storage class, not needed on the host */
+#define __interrupt(n)          /* SDCC interrupt function, plain function here */
+#define __reentrant             /* SDCC: locals on the stack */
 #else
 #define HW_PTR(a) ((volatile uint8_t *)(a))
 #endif
@@ -41,6 +43,25 @@ extern uint8_t host_mem[0x10000];
 #define TPM1MODL REG8(0x0024)
 #define TPMSC_TOF   0x80
 #define TPMSC_CLKSA 0x08        /* clock source = bus clock */
+
+/* ---- ADC (12 bit) ---- */
+#define ADCSC1 REG8(0x0010)
+#define ADCSC2 REG8(0x0011)
+#define ADCRH  REG8(0x0012)
+#define ADCRL  REG8(0x0013)
+#define ADCCFG REG8(0x0016)
+#define APCTL1 REG8(0x0017)
+#define APCTL2 REG8(0x0018)
+#define ADCSC1_COCO 0x80
+#define ADC_CH_BANDGAP 27
+#define ADC_CH_OFF     0x1F
+
+/* ---- TPM2 (current sampling interrupt) ---- */
+#define TPM2SC   REG8(0x0060)
+#define TPM2MODH REG8(0x0063)
+#define TPM2MODL REG8(0x0064)
+#define TPMSC_TOIE  0x40
+#define VECTOR_TPM2_OVF 18          /* 0xFFDA, redirected to 0xDBDA */
 
 /* ---- MCG (clock generator) ---- */
 #define MCGC1  REG8(0x0048)
@@ -115,9 +136,23 @@ extern uint8_t host_mem[0x10000];
 #define SOPT1  REG8(0x1802)        /* write-once after reset */
 #define SOPT2  REG8(0x1803)
 #define SPMSC1 REG8(0x1809)
+#define SPMSC1_BGBE 0x01            /* bandgap buffer for ADC channel 27 */
 #define SPMSC2 REG8(0x180A)
 
 #define SOPT1_STOPE 0x20
+#define SOPT1_COPT_1S 0xC0          /* COP: 2^10 cycles of the 1 kHz LPO */
+
+/* SRS read: cause of the last reset */
+#define SRS_POR  0x80
+#define SRS_PIN  0x40
+#define SRS_COP  0x20
+#define SRS_ILOP 0x10
+#define SRS_ILAD 0x08
+#define SRS_LOC  0x04
+#define SRS_LVD  0x02
+
+/* Service the COP watchdog (0x55, 0xAA to SRS; harmless if it is off) */
+#define COP_SERVICE() do { SRS = 0x55; SRS = 0xAA; } while (0)
 
 /* ---- Pull-up enables (high page) ---- */
 #define PTCPE  REG8(0x1848)
@@ -130,6 +165,8 @@ extern uint8_t host_mem[0x10000];
 #define FSTAT  REG8(0x1825)
 #define FCMD   REG8(0x1826)
 
+#define FOPT_FNORED   0x40          /* 1 = no vector redirection */
+#define FPROT_FPDIS   0x01          /* 1 = no flash protection */
 #define FCDIV_FDIVLD  0x80
 #define FCDIV_PRDIV8  0x40
 #define FSTAT_FCBEF   0x80
@@ -174,6 +211,9 @@ typedef struct {
 #ifndef HOST_TEST
 #define EnableInterrupts()  __asm__("cli")
 #define DisableInterrupts() __asm__("sei")
+#else
+#define EnableInterrupts()
+#define DisableInterrupts()
 #endif
 
 #endif

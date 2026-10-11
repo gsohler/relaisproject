@@ -15,7 +15,7 @@ import argparse
 import re
 import sys
 
-STACK_TOP = 0x10AB
+STACK_TOP = 0x10A9
 RAM_LIMIT = 0x0C00      # startup code zeroes 0x00B0-0x0BFF, stack (1.2 KiB) above
 
 

@@ -91,7 +91,7 @@ def write_s19(path, header, mem, last=None):
         f.write(record("9", 0, b""))
 
 
-def make_firmware(src, version, out):
+def make_firmware(src, version, out, no_cop=False):
     raw = read_s19(src)
     fw = {}
     for a, b in raw.items():
@@ -116,7 +116,9 @@ def make_firmware(src, version, out):
     ver = version.encode("ascii")
     if len(ver) > 8:
         sys.exit("mkfw: version string longer than 8 characters")
-    info = b"RLFW" + bytes([crc >> 8, crc & 0xFF]) + ver.ljust(8, b"\0") + b"\xff\xff"
+    # flags: bit 0 = 0 -> firmware services the COP watchdog (from 1.8 on)
+    flags = 0xFF if no_cop else 0xFE
+    info = b"RLFW" + bytes([crc >> 8, crc & 0xFF]) + ver.ljust(8, b"\0") + bytes([flags, 0xFF])
     for i, b in enumerate(info):
         fw[APP_INFO + i] = b
 
@@ -145,6 +147,8 @@ def main():
     ap.add_argument("-o", "--output", required=True)
     ap.add_argument("--version")
     ap.add_argument("--combine", action="store_true")
+    ap.add_argument("--no-cop", action="store_true",
+                    help="firmware does not service the COP watchdog (before 1.8)")
     a = ap.parse_args()
     if a.combine:
         if len(a.inputs) != 2:
@@ -153,7 +157,7 @@ def main():
     else:
         if len(a.inputs) != 1 or not a.version:
             sys.exit("mkfw: need one input file and --version")
-        make_firmware(a.inputs[0], a.version, a.output)
+        make_firmware(a.inputs[0], a.version, a.output, a.no_cop)
 
 
 if __name__ == "__main__":

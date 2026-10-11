@@ -1,5 +1,5 @@
 /* flash_sim.c - flash model for the simulator (no flash controller there).
- * Erase skips 0x8000-0xBFFF, where the harness keeps the file text. */
+ * Erase skips 0x6000-0xCFFF, where the harness keeps the file text. */
 #include "jm60.h"
 #include "layout.h"
 #include "flash.h"
@@ -11,7 +11,7 @@ static uint8_t flash_cmd(uint16_t addr, uint8_t data, uint8_t cmd)
         return FSTAT_FPVIOL;
     if (cmd == FCMD_PAGE_ERASE) {
         base = addr & (uint16_t)~(FLASH_PAGE - 1);
-        if (base >= 0x8000u && base < 0xC000u)
+        if (base >= 0x6000u && base < 0xD000u)
             return 0;
         for (i = 0; i < FLASH_PAGE; i++)
             if ((uint16_t)(base + i) >= APP_START)

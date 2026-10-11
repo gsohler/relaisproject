@@ -9,6 +9,9 @@
  *   GET              -> "STATE hh"
  *   ID               -> identification string, incl. serial number
  *   SERIAL           -> "SERIAL <16 hex digits>" or "ERR no serial"
+ *   CURRENT          -> "CURRENT 1:0.42 2:0.00 ... 6:0.00", 50 Hz RMS in A
+ *   CURRENT RMS      -> same format, true RMS (incl. harmonics and noise)
+ *   ADC              -> debug: mean and peak-peak of all ADC inputs, VDD
  *   HELP or ?        -> command list
  *   BOOTLOADER       -> "OK", then the board restarts as USB drive (bootloader)
  * Every command answers "OK", "STATE hh", "ID ..." or "ERR <reason>".
@@ -21,14 +24,15 @@
 #include "layout.h"
 #include "flash.h"
 #include "serial.h"
+#include "current.h"
 
-#define FW_VERSION "1.5"
+#define FW_VERSION "1.8"
 
 /* NV option bytes, programmed together with the code.
  * NVOPT 0xFFBF: KEYEN=0, FNORED=1, SEC=10 (unsecured). NVPROT 0xFFBD: no protection. */
 #ifndef HOST_TEST
 const uint8_t __at(0xFFBD) nvprot = 0xFF;
-const uint8_t __at(0xFFBF) nvopt  = 0x42;
+const uint8_t __at(0xFFBF) nvopt  = 0x42;  /* standalone: FNORED = 1, real vectors */
 #endif
 
 static void clock_init(void)
@@ -126,10 +130,31 @@ static uint8_t parse_target(char *p)
 
 static void ok(void)            { cdc_puts("OK\r\n"); }
 
-/* After switching: store the new state in flash, then answer */
+/* mA -> "12.34" (A, two decimals, rounded) */
+static void put_amps(uint16_t ma)
+{
+    uint16_t a = ma / 1000, frac = (uint16_t)((ma % 1000 + 5) / 10);
+    if (frac == 100) {
+        a++;
+        frac = 0;
+    }
+    if (a >= 10)
+        cdc_putc((char)('0' + a / 10));
+    cdc_putc((char)('0' + a % 10));
+    cdc_putc('.');
+    cdc_putc((char)('0' + frac / 10));
+    cdc_putc((char)('0' + frac % 10));
+}
+
+/* After switching: store the new state in flash, then answer.
+ * No interrupts while the flash is busy, so sampling pauses. */
 static void ok_saved(void)
 {
-    if (relay_save())
+    uint8_t saved;
+    current_pause();
+    saved = relay_save();
+    current_resume();
+    if (saved)
         cdc_puts("OK\r\n");
     else
         cdc_puts("ERR state not saved\r\n");
@@ -148,6 +173,7 @@ static void enter_bootloader(void)
 
     ok();
     delay_ms(20);                   /* let "OK" reach the host */
+    DisableInterrupts();
     magic[0] = BOOT_MAGIC_0;
     magic[1] = BOOT_MAGIC_1;
     magic[2] = BOOT_MAGIC_2;
@@ -213,10 +239,29 @@ static void execute(char *p)
         } else {
             err("no serial");
         }
+    } else if ((a = match(p, "CURRENT")) != 0) {
+        uint8_t rms = match(a, "RMS") != 0;
+        uint16_t i50, irms;
+        if (*a && !rms) { err("args"); return; }
+        if (!current_available()) { err("no interrupt vector - update bootloader"); return; }
+        if (!current_get(0, &i50, &irms)) { err("no data yet"); return; }
+        cdc_puts("CURRENT");
+        for (i = 0; i < RELAY_COUNT; i++) {
+            current_get(i, &i50, &irms);
+            cdc_putc(' ');
+            cdc_putc((char)('1' + i));
+            cdc_putc(':');
+            put_amps(rms ? irms : i50);
+        }
+        cdc_puts("\r\n");
+    } else if (match(p, "ADC")) {
+        current_adc_report();
+        ok();
     } else if (match(p, "BOOTLOADER")) {
         enter_bootloader();
     } else if (match(p, "HELP") || match(p, "?")) {
-        cdc_puts("ON <n|ALL>, OFF <n|ALL>, TOGGLE <n>, SET <hex>, GET, ID, SERIAL, BOOTLOADER\r\n");
+        cdc_puts("ON <n|ALL>, OFF <n|ALL>, TOGGLE <n>, SET <hex>, GET, ID, SERIAL,\r\n"
+                 "CURRENT [RMS], ADC, BOOTLOADER\r\n");
     } else {
         /* Echo what was received, so wrong line endings or stray bytes
          * (backspace, escape sequences) can be seen. Non-printable bytes
@@ -272,6 +317,18 @@ unsigned char _sdcc_external_startup(void)
     return 0;                   /* 0 = go on and initialise RAM */
 }
 
+/* Tells the bootloader that this firmware starts fine (crash counter = 0,
+ * see boot/decide.c). Missing TPM1 ticks consumed by delay_ms() only make
+ * the confirmation come a bit later. */
+static uint16_t uptime_ms;
+
+static void boot_confirm(void)
+{
+    volatile uint8_t *cnt = HW_PTR(BOOT_COUNT_ADDR);
+    cnt[0] = 0;
+    cnt[1] = 0xFF;
+}
+
 void main(void)
 {
     uint8_t buf[64];
@@ -282,9 +339,17 @@ void main(void)
     flash_init();               /* flash clock, for the saved relay state */
     relay_init();               /* relays to their saved state */
     usb_init();
+    current_init();
+    EnableInterrupts();         /* only the TPM2 sampling interrupt */
 
     for (;;) {
         usb_poll();
+        current_task();
+        if (uptime_ms < APP_CONFIRM_MS && (TPM1SC & TPMSC_TOF)) {
+            TPM1SC &= (uint8_t)~TPMSC_TOF;
+            if (++uptime_ms == APP_CONFIRM_MS)
+                boot_confirm();         /* running fine: clear crash counter */
+        }
         n = cdc_read(buf);
         for (i = 0; i < n; i++)
             feed((char)buf[i]);

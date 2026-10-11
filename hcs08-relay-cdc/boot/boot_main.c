@@ -22,6 +22,7 @@
 #include "flash.h"
 #include "disk.h"
 #include "usb_msc.h"
+#include "decide.h"
 
 /* NV option bytes: protect 0xDC00-0xFFFF, vector redirection on, unsecured */
 const uint8_t __at(0xFFBD) nvprot = BOOT_NVPROT;
@@ -29,15 +30,14 @@ const uint8_t __at(0xFFBF) nvopt  = BOOT_NVOPT;
 
 #define FLASH8(a) (*HW_PTR(a))
 
-/* COP watchdog off before RAM initialisation (SOPT1 is write-once; the
- * application writes the same value, which is then ignored).
- * The SDCC hc08 startup code only copies initialised variables, it does not
+/* The SDCC hc08 startup code only copies initialised variables, it does not
  * clear the others, so all variables (0x00B0-0x0BFF) are zeroed here. The
- * stack (below 0x10AC) and the request word at 0x10AC are not touched. */
+ * stack, the crash counter and the request word (0x10AA-0x10AF) are not
+ * touched. SOPT1 (write-once) is NOT written here: the COP runs with its
+ * reset default (about 1 s) until main() has decided what to start. */
 unsigned char _sdcc_external_startup(void)
 {
     volatile uint8_t *p;
-    SOPT1 = SOPT1_STOPE;
     for (p = HW_PTR(0x00B0); p != HW_PTR(0x0C00); p++)
         *p = 0;
     return 0;
@@ -93,12 +93,19 @@ static uint8_t tick(void)
     return 0;
 }
 
+static void set_request(uint8_t a, uint8_t b, uint8_t c, uint8_t d)
+{
+    volatile uint8_t *m = HW_PTR(BOOT_MAGIC_ADDR);
+    m[0] = a; m[1] = b; m[2] = c; m[3] = d;
+}
+
 static void reset_board(void)
 {
     uint8_t n = 50;
     usb_detach();
     while (n)                       /* keep D+ released for 50 ms */
         n -= tick();
+    set_request('R', 'S', 'E', 'T');   /* intentional, not a crash */
     __asm__(".db 0x8D");            /* illegal opcode -> reset */
 }
 
@@ -111,24 +118,40 @@ static void start_app(void)
 void main(void)
 {
     volatile uint8_t *magic = HW_PTR(BOOT_MAGIC_ADDR);
-    uint8_t stay = 0, n;
+    volatile uint8_t *cnt = HW_PTR(BOOT_COUNT_ADDR);
+    uint8_t srs = SRS, request = REQ_NONE, count, emergency, reason, n;
     uint16_t idle = 0;
 
     if (magic[0] == BOOT_MAGIC_0 && magic[1] == BOOT_MAGIC_1 &&
         magic[2] == BOOT_MAGIC_2 && magic[3] == BOOT_MAGIC_3)
-        stay = 1;
+        request = REQ_BOOT;
+    else if (magic[0] == 'R' && magic[1] == 'S' && magic[2] == 'E' && magic[3] == 'T')
+        request = REQ_RESET;
     magic[0] = 0;
+    count = (cnt[1] == (uint8_t)~cnt[0]) ? cnt[0] : 0;
 
     /* Emergency entry: SDA (PTC1) bridged to GND at power-up */
     PTCPE |= 0x02;
     for (n = 200; n; n--)           /* let the pull-up charge the line */
         __asm__("nop");
-    if (!(PTCD & 0x02))
-        stay = 1;
+    emergency = !(PTCD & 0x02);
     PTCPE &= (uint8_t)~0x02;
 
-    if (!stay && app_valid())
+    reason = boot_decide(srs, request, &count, emergency, app_valid());
+    cnt[0] = count;
+    cnt[1] = (uint8_t)~count;
+
+    if (reason == BOOT_START_APP) {
+        /* COP for firmware that services it (info block flag), else off */
+        if (!(FLASH8(APP_INFO + APP_INFO_FLAGS) & APP_FLAG_NO_COP))
+            SOPT1 = SOPT1_COPT_1S | SOPT1_STOPE;
+        else
+            SOPT1 = SOPT1_STOPE;
+        COP_SERVICE();
         start_app();
+    }
+    SOPT1 = SOPT1_STOPE;            /* bootloader: COP off */
+    disk_set_reason(reason);
 
     /* Bootloader: relay driver inputs to inactive level */
     PTED &= (uint8_t)~BOOT_IDLE_PTE;

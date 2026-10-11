@@ -476,7 +476,7 @@ static void scsi_command(const uint8_t *cb, uint8_t dir_in)
         sector[4] = 31;
         mem_cpy(sector + 8, "RELAY   ", 8);
         mem_cpy(sector + 16, "Bootloader      ", 16);
-        mem_cpy(sector + 32, "1.0 ", 4);
+        mem_cpy(sector + 32, "1.2 ", 4);
         reply(36);
         break;
 

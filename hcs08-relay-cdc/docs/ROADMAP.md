@@ -15,6 +15,17 @@ from the original plan:
   "CRC fallback" needed: an incomplete update never gets an info block).
 - Still to verify on real hardware: Windows and macOS hosts, update time.
 
+## 1b. Bootloader 1.1 / 1.2 - DONE
+
+- 1.1: NVOPT 0x3E (vector redirection on; 1.0 had 0x42 = off, so
+  application interrupts crashed). Firmware 1.7+ checks the vector at runtime.
+- 1.2: crash fallback (3 abnormal resets in a row -> stay in the
+  bootloader), COP watchdog for firmware that declares it (info block flag),
+  start reason in INFO.TXT. Boards with 1.0/1.1: `make reprogram SERIAL=...`.
+- To verify on hardware: COP service sequence (0x55/0xAA to SRS) really
+  keeps the COP quiet - a wrong sequence would show up as a reset every
+  second and then the crash fallback.
+
 ## 2. Serial number - DONE (firmware 1.5, tools/production.py)
 
 See README "Production: serial numbers". Random 64-bit number generated on
@@ -22,15 +33,13 @@ the PC, CRC16, slot 0xFFA0 in the protected bootloader area, CSV log with
 duplicate check, USB check after programming. Shown as USB serial number,
 in `ID`, `SERIAL` and `INFO.TXT`.
 
-## 3. Current measurement (ACS712ELCTR-20A per relay, 6 per board)
+## 3. Current measurement - IMPLEMENTED (firmware 1.6), channels to verify
 
-- ACS712 20 A: 5 V supply, 2.5 V at 0 A, 100 mV/A, ratiometric.
-- To find out: MCU VDD (5 V or 3.3 V -> divider?), which ADC pin each sensor
-  output (ACS712 pin 7, VIOUT) goes to (ADC inputs on PTB0-7, PTD0/1/3/4).
-  Add an `ADC` debug command that prints all channels.
-- Measure: sample several 50 Hz periods, subtract mean (offset), compute RMS.
-  Commands `CURRENT` -> `I 1:0.42 2:0.00 ... 6:0.00` and a calibration command.
-- Realistic lower limit ~0.1-0.2 A (sensor noise). Power only as I x 230 V.
+See README "Current measurement". Open:
+- find the real ADC channels with `ADC` and enter them in board.h,
+- check VDD (ADC VDD line) and the scale with a known load,
+- noise floor on real hardware; maybe a small dead band,
+- show the currents in the gateway (web page, /api/boards, /switch).
 
 ## 4. WLAN via ESP32 (the JM60 has no USB host, so no WLAN dongle)
 

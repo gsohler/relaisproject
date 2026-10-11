@@ -11,6 +11,23 @@ Everything builds on Linux with SDCC, without CodeWarrior. The USB stack
 is small and self-contained (`src/usb_cdc.c`, about 600 lines, polled, no
 interrupts).
 
+## Board connections
+
+| Connector | Pins |
+|---|---|
+| Mains, green 11-pin pluggable screw terminal (Phoenix COMBICON MSTB 2,5 type, pitch 5.0/5.08 mm, 3 + 8) | **Supply:** N, PE, L - **Outputs:** N, PE, L1, L2, L3, L4, L5, L6 |
+| USB | USB device (CDC / bootloader drive), also powers the logic |
+| JST ZH 1.5 mm, 6 pins | BDM (BKGD, RESET, VDD, GND) and SCL/SDA |
+
+- The relays switch only the phase: relay n connects L to Ln. N and PE are
+  passed through and never switched.
+- All six outputs share one L supply pin and one N/PE output pin. The sum
+  of all load currents flows through these terminals, so the total load
+  is limited by the terminal and PCB rating (MSTB 2,5: 12 A), not by the
+  20 A of the current sensors. Several loads need an external N/PE
+  distribution.
+- Each output has its own ACS712 current sensor (see docs/ROADMAP.md).
+
 ## Pin mapping
 
 Measured on the real board (pulses active high), entered in `src/board.h`:
@@ -82,7 +99,7 @@ functions (`memset`, `memcpy`, ...); `boot/util.h` has replacements and
 | 0x1960-0xDBAF | application |
 | 0xDBB0-0xDBBF | application info block (magic, CRC16, version), written last |
 | 0xDBC0-0xDBFF | application vectors (hardware vector redirection) |
-| 0xDC00-0xFFFF | bootloader, write-protected (NVPROT 0xDA, NVOPT 0x42) |
+| 0xDC00-0xFFFF | bootloader, write-protected (NVPROT 0xDA, NVOPT 0x3E = vector redirection on) |
 | 0xFFA0-0xFFA9 | serial number slot (8 bytes + CRC16), written at production |
 
 The bootloader owns the reset vector and starts after every reset. If the
@@ -130,6 +147,16 @@ A board can only get a number with USBDM, not over the bootloader.
 
 `--dry-run` only writes the per-board image files to `build/production/`.
 
+To reprogram a board that already has a number (e.g. a new bootloader),
+keep the number: `make reprogram SERIAL=3F9A07C2D41B88E5`. The number must
+be in the log.
+
+Bootloader 1.0 had vector redirection switched off (NVOPT 0x42 instead of
+0x3E), so application interrupts do not work with it. Firmware 1.7 and
+later detect this and then run without the current measurement interrupt
+(`CURRENT` answers `ERR no interrupt vector - update bootloader`; `ADC`
+works). Boards with bootloader 1.0 need `make reprogram` once.
+
 ## Firmware update over USB (bootloader)
 
 1. Start the bootloader:
@@ -156,6 +183,18 @@ Further details:
   the file again.
 - Emergency entry: bridge **SDA (white) to GND (yellow)** on the JST
   connector while plugging the board in.
+- **Crash fallback** (bootloader 1.2): if the firmware crashes three times
+  in a row (reset by illegal opcode, illegal address, loss of clock or the
+  COP watchdog) before it has run 5 s, the bootloader stays active, and
+  `INFO.TXT` says `Started: firmware crashed 3 times in a row`. Copy a
+  working firmware, or eject to try the installed one again. Power-on and
+  the reset pin clear the counter, intentional resets (`BOOTLOADER`, after
+  an update) do not count.
+- **COP watchdog**: firmware 1.8 and later marks in its info block that it
+  services the COP; the bootloader then starts it with the COP enabled
+  (about 1 s), so a hang becomes a reset (and, if repeated, a fallback).
+  Older firmware runs without COP. The COP is serviced in `usb_poll()`,
+  which runs in every wait loop.
 - Only firmware files from `make firmware` are accepted. The raw
   `relay_cdc.s19` is rejected (`ERROR - wrong file`), because its vectors
   are in the bootloader area.
@@ -188,6 +227,9 @@ are ignored.
 | `GET` | `STATE hh` |
 | `ID` | `ID <product> FW <version> SN <serial>` |
 | `SERIAL` | `SERIAL <16 hex digits>` or `ERR no serial` |
+| `CURRENT` | `CURRENT 1:0.42 2:0.00 ... 6:0.00` - 50 Hz current per relay output in A |
+| `CURRENT RMS` | same format, true RMS (incl. harmonics and noise) |
+| `ADC` | debug: `ADC <ch> mean <m> pp <p>` for AD0..AD11, then `ADC VDD <mV>`, then `OK` |
 | `BOOTLOADER` | `OK`, then restart as USB drive `RELAYBOOT` |
 | `HELP` or `?` | command list |
 | anything invalid | `ERR <reason>`; an unknown command is echoed as `ERR command '<line>'` |
@@ -214,6 +256,30 @@ updates keep it; only a USBDM mass erase clears it (then all relays start
 off). Two pages are used as a log: one byte pair per change, one page erase
 per 255 changes, about 5 million changes in total. If the flash write fails,
 the command answers `ERR state not saved` (the relay has switched anyway).
+
+## Current measurement
+
+Each output has an ACS712ELCTR-20A Hall sensor (100 mV/A at 5 V, 2.5 V at
+0 A). A TPM2 interrupt samples the six sensor channels at 1 kHz. Every
+100 ms (5 mains periods) the main loop removes the offset (mean) and
+computes per channel:
+
+- the **50 Hz component** (single-bin DFT, `CURRENT`): rejects noise and
+  harmonics, the best value for "how much current flows",
+- the **true RMS** of the AC part (`CURRENT RMS`): includes harmonics of
+  switched-mode loads, but also noise.
+
+Resolution is about 12 mA per ADC step; with sensor noise, expect a floor
+of a few 10 mA. Values are at most ~0.2 s old. Sampling pauses for the
+few ms of a flash write (relay state) and restarts the window.
+
+**Finding the channels:** `CURRENT_ADC_CHANNELS` in `src/board.h` is a
+placeholder (AD0..AD5). Run `ADC`: sensor outputs show a mean of about half
+the ADC range (about 2048 at VDD 5 V) and a small peak-peak value. Switch a
+load (a kettle, a heater) on one output and run `ADC` again: that channel's
+peak-peak value rises. The last line shows VDD, measured with the internal
+bandgap (about +-3 %). If VDD is not 5 V, or the sensor output goes through
+a divider, adjust `CURRENT_VREF_MV` / `CURRENT_MV_PER_A`.
 
 ## Implementation notes
 

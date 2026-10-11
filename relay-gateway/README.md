@@ -106,10 +106,10 @@ survive restarts and reflashing, are shown on the buttons and can be used to
 switch over HTTP. Names are unique (not case-sensitive) and 1-32 characters
 long.
 
-Note: as long as all boards report the same serial number ("0001"), the
-same names show up on every board and `/switch` answers
-`ERR serial number not unique` if more than one such board is connected.
-This goes away with the random serial numbers from the bootloader.
+Names need a unique serial number per board (board firmware 1.5 or later,
+programmed with `make production`). Boards without a number all report
+`NOSERIAL`: they share their names, and `/switch` answers
+`ERR serial number not unique` if more than one of them is connected.
 
 ## Simple HTTP switching
 
@@ -120,7 +120,7 @@ Plain-text answers, made for `curl`, scripts and Home Assistant
 curl "http://relaygw-xxxx.local/switch?name=Pumpe&state=on"       # -> OK
 curl "http://relaygw-xxxx.local/switch?name=Pumpe&state=toggle"   # -> OK
 curl "http://relaygw-xxxx.local/switch?name=Pumpe"                # -> on / off
-curl "http://relaygw-xxxx.local/switch?serial=0001&relay=3&state=off"
+curl "http://relaygw-xxxx.local/switch?serial=3F9A07C2D41B88E5&relay=3&state=off"
 ```
 
 `state` is `on`, `off`, `toggle` (or `1`/`0`). Names with spaces or umlauts
@@ -137,8 +137,9 @@ curl -X POST http://relaygw-xxxx.local/api/cmd -d '{"addr":3,"cmd":"ON 2"}'
 ```
 
 `addr` is the USB address from `/api/boards`. Commands are the same as over
-USB: `ON n|ALL`, `OFF n|ALL`, `TOGGLE n`, `SET hh`, `GET`, `ID`, `PULSE pin`.
-`SCAN` is blocked because it runs for about a minute. With password: `curl -u admin:PASSWORD …`
+USB: `ON n|ALL`, `OFF n|ALL`, `TOGGLE n`, `SET hh`, `GET`, `ID`.
+`BOOTLOADER` is refused: the board would turn into a USB drive that the
+gateway cannot use (firmware updates over a direct USB connection). With password: `curl -u admin:PASSWORD …`
 
 ## Notes on the implementation
 
@@ -147,8 +148,8 @@ USB: `ON n|ALL`, `OFF n|ALL`, `TOGGLE n`, `SET hh`, `GET`, `ID`, `PULSE pin`.
   At the start of each session the board's bulk endpoints are reset with
   CLEAR_FEATURE(ENDPOINT_HALT), because new host pipes start with DATA0. Then
   DTR is set and stale output is discarded.
-- All boards currently report the same USB serial number ("0001"). Until the
-  bootloader with random serial numbers exists, boards are told apart by USB
-  address and hub port (`location`).
+- Boards are identified by their USB serial number (random, set at
+  production). Boards without one report `NOSERIAL` and are told apart by
+  USB address and hub port (`location`).
 - Planned: current values (`CURRENT`) per relay as soon as the board firmware
   supports it, MQTT / Home Assistant auto-discovery, OTA updates.

@@ -32,10 +32,14 @@
  *   +4  CRC16 high, low         CRC-16/CCITT-FALSE over APP_START..APP_INFO-1
  *                               and APP_VECTORS..BOOT_START-1 (erased = 0xFF)
  *   +6  version, 8 bytes ASCII, NUL padded
- *   +14 2 bytes reserved (0xFF)
+ *   +14 flags: bit 0 = 0 -> the application services the COP watchdog,
+ *       so the bootloader enables it (1 s). Older firmware has 0xFF.
+ *   +15 reserved (0xFF)
  */
 #define APP_INFO_SIZE    16u
 #define APP_INFO_VERSION 6u
+#define APP_INFO_FLAGS   14u        /* bit 0 = 0: application services the COP */
+#define APP_FLAG_NO_COP  0x01
 
 /* Serial number slot inside the protected bootloader area:
  * 8 bytes serial (big endian) + CRC16 (high, low) of those 8 bytes. */
@@ -43,14 +47,24 @@
 #define SERIAL_LEN       8u
 
 /* NVPROT 0xDA: FPS = 0x6D -> 0xDC00-0xFFFF protected, FPDIS = 0.
- * NVOPT  0x42: KEYEN = 01 (backdoor off), FNORED = 0 (vector redirection
- *              on), SEC = 10 (unsecured). */
+ * NVOPT  0x3E: bit 7 KEYEN = 0 (backdoor off), bit 6 FNORED = 0 (vector
+ *              redirection ON), bits 5..2 unused, SEC = 10 (unsecured).
+ *              Bootloader 1.0 had 0x42 = FNORED 1: no redirection, so
+ *              application interrupts went to the erased real vectors.
+ *              The application checks this at runtime (current.c). */
 #define BOOT_NVPROT      0xDA
-#define BOOT_NVOPT       0x42
+#define BOOT_NVOPT       0x3E
 
-/* RAM word that survives a reset: the application writes it and resets,
- * the bootloader then stays active instead of starting the application.
- * Both stacks start below it (--stack-loc 0x10AB). */
+/* RAM that survives a reset (not power-on). Both stacks start below it
+ * (--stack-loc 0x10A9).
+ *   0x10AA, 0x10AB  crash counter: count, ~count (see boot/decide.c)
+ *   0x10AC..0x10AF  request word:
+ *                   "BOOT" = stay in the bootloader (CDC command BOOTLOADER)
+ *                   "RSET" = intentional reset by the bootloader, not a crash */
+#define BOOT_COUNT_ADDR  0x10AAu
+#define BOOT_CRASH_LIMIT 3          /* abnormal resets in a row -> bootloader */
+#define APP_CONFIRM_MS   5000u      /* app runs this long -> counter cleared */
+
 #define BOOT_MAGIC_ADDR  0x10ACu
 #define BOOT_MAGIC_0     'B'
 #define BOOT_MAGIC_1     'O'

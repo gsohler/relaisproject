@@ -14,6 +14,7 @@
 #include "layout.h"
 #include "usb_msc.h"
 #include "disk.h"
+#include "decide.h"
 
 uint8_t host_mem[0x10000];
 extern int host_flash_ops;
@@ -437,6 +438,37 @@ int main(int argc, char **argv)
     uint8_t ej[16] = { 0x1B, 0, 0, 0, 0x02 };
     CHECK(scsi(ej, 0, NULL, 0, NULL) == 0 && msc_eject_request, "eject");
     CHECK(scsi(tur, 0, NULL, 0, NULL) == 1, "not ready after eject");
+
+    /* ---- start decision / crash fallback ---- */
+    {
+        uint8_t c = 0;
+        CHECK(boot_decide(SRS_POR, REQ_NONE, &c, 0, 1) == BOOT_START_APP && c == 0, "power-on");
+        CHECK(boot_decide(SRS_ILOP, REQ_NONE, &c, 0, 1) == BOOT_START_APP && c == 1, "crash 1");
+        CHECK(boot_decide(SRS_COP, REQ_NONE, &c, 0, 1) == BOOT_START_APP && c == 2, "crash 2 (COP)");
+        CHECK(boot_decide(SRS_ILAD, REQ_NONE, &c, 0, 1) == BOOT_CRASHED && c == 0, "crash 3 -> bootloader");
+        c = 2;
+        CHECK(boot_decide(SRS_LOC, REQ_NONE, &c, 0, 1) == BOOT_CRASHED, "loss of clock counts");
+        c = 2;
+        CHECK(boot_decide(SRS_ILOP, REQ_RESET, &c, 0, 1) == BOOT_START_APP && c == 0,
+              "intentional reset (after update) is no crash");
+        c = 2;
+        CHECK(boot_decide(SRS_ILOP, REQ_BOOT, &c, 0, 1) == BOOT_REQUESTED && c == 0, "BOOTLOADER command");
+        c = 2;
+        CHECK(boot_decide(SRS_PIN, REQ_NONE, &c, 0, 1) == BOOT_START_APP && c == 0, "reset pin clears");
+        c = 2;
+        CHECK(boot_decide(SRS_POR | SRS_LVD, REQ_NONE, &c, 0, 1) == BOOT_START_APP && c == 0, "LVD clears");
+        c = 0;
+        CHECK(boot_decide(SRS_POR, REQ_NONE, &c, 1, 1) == BOOT_EMERGENCY, "emergency");
+        CHECK(boot_decide(SRS_POR, REQ_NONE, &c, 0, 0) == BOOT_NO_APP, "no app");
+        c = 1;                          /* crash, app ran fine and confirmed, crash again */
+        boot_decide(SRS_ILOP, REQ_NONE, &c, 0, 1);
+        c = 0;                          /* confirmation by the app */
+        CHECK(boot_decide(SRS_ILOP, REQ_NONE, &c, 0, 1) == BOOT_START_APP && c == 1,
+              "confirmation restarts the count");
+        disk_set_reason(BOOT_CRASHED);
+        read_info(info);
+        CHECK(strstr(info, "Started:  firmware crashed 3 times") != NULL, "INFO.TXT reason");
+    }
 
     /* ---- bus reset deconfigures ---- */
     INTSTAT |= INT_USBRST;

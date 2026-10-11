@@ -519,6 +519,9 @@ void usb_poll(void)
 {
     uint8_t s;
 
+    /* usb_poll() runs in every wait loop (main loop, delay_ms, cdc_putc),
+     * so this is the one place that services the COP watchdog */
+    COP_SERVICE();
     if (!usb_active)
         return;                     /* e.g. delay_ms() before usb_init() */
     s = INTSTAT;

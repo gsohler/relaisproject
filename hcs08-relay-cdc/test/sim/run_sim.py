@@ -10,6 +10,7 @@ Checks:
   2. writing the firmware file programs the same bytes as in the file and
      ends with status OK (CRC check passed, info block written)
 """
+import math
 import os
 import re
 import shutil
@@ -68,6 +69,87 @@ def simulate(work, files, dumps):
     return mem
 
 
+# ---------------------------------------------------------------------------
+# current measurement: SDCC build of src/current.c vs. a Python model
+# ---------------------------------------------------------------------------
+APP_FLAGS = ["-ms08", "--std-sdcc11", "--opt-code-size", "-DXTAL_MHZ=12", "-DSIM_TEST",
+             "-I" + os.path.join(ROOT, "src")]
+APP_MEM = ["--code-loc", "0xA000", "--data-loc", "0x00B0", "--xram-loc", "0x0100",
+           "--xram-size", "0x0B00", "--stack-loc", "0xDFFF"]
+COS = [127, 121, 103, 75, 39, 0, -39, -75, -103, -121, -127, -121, -103, -75, -39, 0, 39, 75, 103, 121]
+SIN = [0, 39, 75, 103, 121, 127, 121, 103, 75, 39, 0, -39, -75, -103, -121, -127, -121, -103, -75, -39]
+
+
+def isqrt(v):
+    return int(math.isqrt(v))
+
+
+def model(samples, ua_per_lsb=12207, n=100):
+    """exact integer model of evaluate() in src/current.c"""
+    out = []
+    for c in range(6):
+        xs = [samples[k][c] for k in range(n)]
+        mean = (sum(xs) + n // 2) // n
+        sq = re = im = 0
+        for k, x in enumerate(xs):
+            d = x - mean
+            sq += d * d
+            re += d * COS[k % 20]
+            im += d * SIN[k % 20]
+        rms = min(65535, isqrt((sq // n) << 8) * ua_per_lsb // 16000)
+        re, im, shift = abs(re), abs(im), 0
+        while re > 46000 or im > 46000:
+            re >>= 1
+            im >>= 1
+            shift += 1
+        mag = isqrt(re * re + im * im) << shift
+        i50 = min(65535, ((mag >> 5) * 2032 // 35701) * ua_per_lsb // 16000)
+        out.append((i50, rms))
+    return out
+
+
+def current_test(work):
+    import random
+    random.seed(1)
+    amps = [1.0, 5.0, 0.0, 10.0, 2.0, 14.0]
+    lsb = 12207e-6
+    samples = []
+    for k in range(100):
+        row = []
+        for c in range(6):
+            w = 2 * math.pi * 50 * k / 1000.0
+            i = amps[c] * math.sqrt(2) * (math.sin(w + c) + (0.3 * math.sin(3 * w) if c == 1 else 0))
+            row.append(max(0, min(4095, round(2040 + i / lsb + random.uniform(-3, 3)))))
+        samples.append(row)
+    objs = []
+    for src in ["test/sim/sim_current.c", "src/current.c"]:
+        obj = os.path.join(work, "c_" + os.path.basename(src).replace(".c", ".rel"))
+        run(["sdcc"] + APP_FLAGS + APP_MEM + ["-c", os.path.join(ROOT, src), "-o", obj])
+        objs.append(obj)
+    ihx_path = os.path.join(work, "simc.ihx")
+    run(["sdcc", "-ms08", "--out-fmt-ihx"] + APP_MEM + objs + ["-o", ihx_path])
+    shutil.copy(ihx_path.replace(".ihx", ".map"), os.path.join(work, "sim.map"))
+    p = os.path.join(work, "samples.ihx")
+    ihx(p, [(0x6000, b"".join(v.to_bytes(2, "big") for row in samples for v in row))])
+    mem = simulate(work, [ihx_path, p], [(0x0C00, 0x21)])
+    want = model(samples)
+    got = [((mem[0x0C00 + 4 * c] << 8 | mem[0x0C01 + 4 * c]),
+            (mem[0x0C02 + 4 * c] << 8 | mem[0x0C03 + 4 * c])) for c in range(6)]
+    fails = 0
+    if mem.get(0x0C20) != 1:
+        fails += 1
+        print("FAIL current: no valid result")
+    for c in range(6):
+        if got[c] != want[c]:
+            fails += 1
+            print("FAIL current ch %d: sim %s, Python model %s" % (c, got[c], want[c]))
+        if abs(got[c][0] / 1000.0 - amps[c]) > amps[c] * 0.01 + 0.03:
+            fails += 1
+            print("FAIL current ch %d: %.3f A, want %.2f A" % (c, got[c][0] / 1000.0, amps[c]))
+    print("current: 6 channels compared (%s)" % ", ".join("%.2f" % (g[0] / 1000.0) for g in got))
+    return fails
+
+
 def main():
     if len(sys.argv) != 2:
         sys.exit(__doc__)
@@ -104,10 +186,10 @@ def main():
 
     # 2. write the firmware file
     text = open(fw_path, "rb").read()
-    if len(text) > 0x4000 - 64:
+    if len(text) > 0x7000 - 64:
         sys.exit("run_sim: firmware file too large for the harness")
     p = os.path.join(work, "params.ihx")
-    ihx(p, [(0x0C00, bytes([0, 0, 0xEE, 0, 1])), (0x8000, text + bytes(64))])
+    ihx(p, [(0x0C00, bytes([0, 0, 0xEE, 0, 1])), (0x6000, text + bytes(64))])
     expect = {}
     for line in text.decode().splitlines():
         if line.startswith("S1"):
@@ -127,6 +209,7 @@ def main():
         print("FAIL write: %d flash bytes differ, first 0x%04X: sim %s want %02X"
               % (len(bad), bad[0], mem.get(bad[0]), expect.get(bad[0], 0xFF)))
     print("write: %d bytes compared, status %s" % (len(expect), mem.get(0x0C02)))
+    fails += current_test(work)
     shutil.rmtree(work)
     print("simulator: %s" % ("all tests passed" if not fails else "%d FAILURES" % fails))
     sys.exit(1 if fails else 0)

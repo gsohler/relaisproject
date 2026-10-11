@@ -41,6 +41,22 @@
 #define RELAY_ACTIVE_LOW 0
 #endif
 
+/* ---- Current sensors (ACS712ELCTR-20A, one per relay) ----
+ * ADC channel of relay 1..6. AD0-AD7 = PTB0-PTB7, AD8 = PTD0, AD9 = PTD1,
+ * AD10 = PTD3, AD11 = PTD4. PLACEHOLDER: find the real channels with the
+ * ADC command (sensor outputs sit at about half of VDD without load). */
+#define CURRENT_ADC_CHANNELS { 0, 1, 2, 3, 4, 5 }
+
+/* Scale: ADC reference voltage (= VDD) and sensor sensitivity. ACS712-20A:
+ * 100 mV/A at 5 V supply. If the sensor output goes through a divider,
+ * reduce CURRENT_MV_PER_A accordingly. 5000 mV / 4096 / 100 mV/A
+ * = 12.2 mA per ADC step. */
+#define CURRENT_VREF_MV   5000UL
+#define CURRENT_MV_PER_A  100UL
+/* 1000000 / 4096 = 15625 / 64; written so that SDCC's 32-bit arithmetic
+ * does not overflow (VREF_MV * 1000000 would) */
+#define CURRENT_UA_PER_LSB ((CURRENT_VREF_MV * 15625UL / 64UL) / CURRENT_MV_PER_A)
+
 /* Pin encoding: PIN(port, bit), port PA..PG */
 #define PA 0
 #define PB 1

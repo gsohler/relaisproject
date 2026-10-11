@@ -23,7 +23,7 @@
 #include "flash.h"
 #include "disk.h"
 
-#define BOOT_VERSION "1.0"
+#define BOOT_VERSION "1.2"
 
 #define FAT_SECTORS   6u
 #define FAT1_LBA      1u
@@ -296,6 +296,13 @@ uint8_t disk_status(void)
     return status;
 }
 
+static uint8_t boot_reason;
+
+void disk_set_reason(uint8_t reason)
+{
+    boot_reason = reason;
+}
+
 void disk_init(void)
 {
     new_session();
@@ -362,6 +369,13 @@ static void info_text(char *p)
         "ERROR - flash erase/program failed",
         "ERROR - file incomplete (CRC mismatch), copy it again",
     };
+    static const char * const why[] = {
+        "-",
+        "no complete firmware",
+        "requested (BOOTLOADER command)",
+        "emergency (SDA tied to GND)",
+        "firmware crashed 3 times in a row",
+    };
 
     p = put(p, "Relay board bootloader " BOOT_VERSION "\r\nFirmware: ");
     if (app_valid()) {
@@ -377,6 +391,8 @@ static void info_text(char *p)
     serial_string(ser);
     p = put(p, "\r\nSerial:   ");
     p = put(p, ser);
+    p = put(p, "\r\nStarted:  ");
+    p = put(p, boot_reason < 5 ? why[boot_reason] : "?");
     p = put(p, "\r\nUpdate:   ");
     p = put(p, st[status]);
     p = put(p, "\r\n\r\nCopy relay_fw-*.s19 onto this drive to update.\r\n"
