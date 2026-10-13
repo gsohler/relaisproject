@@ -24,7 +24,7 @@ PYTHON   ?= python3
 
 VERSION  := $(shell sed -n 's/^\#define FW_VERSION "\(.*\)"/\1/p' src/main.c)
 
-APP_SRCS  := src/main.c src/usb_cdc.c src/usb_desc.c src/relay.c src/timer.c src/flash.c src/nvstate.c src/serial.c src/current.c
+APP_SRCS  := src/main.c src/usb_cdc.c src/usb_desc.c src/relay.c src/timer.c src/flash.c src/nvstate.c src/serial.c src/current.c src/nvfix.c
 BOOT_SRCS := boot/boot_main.c boot/usb_msc.c boot/disk.c boot/decide.c src/flash.c boot/util.c
 
 APP_RAW   := $(BUILD)/relay_cdc.s19
@@ -92,7 +92,7 @@ HOSTCC := gcc -DHOST_TEST -DXTAL_MHZ=12 -Isrc -Wall -Wno-main -g -fsanitize=addr
 test: $(FIRMWARE)
 	mkdir -p $(BUILD)
 	$(HOSTCC) -DRELAY_MAP_VALID=1 -o $(BUILD)/host_test \
-	    test/host_test.c src/usb_cdc.c src/usb_desc.c src/relay.c src/timer.c src/flash.c src/nvstate.c src/serial.c src/current.c -lm
+	    test/host_test.c src/usb_cdc.c src/usb_desc.c src/relay.c src/timer.c src/flash.c src/nvstate.c src/serial.c src/current.c src/nvfix.c -lm
 	./$(BUILD)/host_test
 	$(HOSTCC) -Iboot -o $(BUILD)/boot_test \
 	    test/boot_test.c boot/usb_msc.c boot/disk.c boot/decide.c src/flash.c boot/util.c
@@ -103,8 +103,11 @@ test: $(FIRMWARE)
 # ---- programming with USBDM ----
 # Board powered by its own USB. Mass erase removes the flash protection of
 # the bootloader area as well.
+# -security=image: program NVPROT/NVOPT exactly as in the image. Do NOT use
+# -unsecure: it replaces them with default values (no flash protection,
+# FNORED = 1 -> no vector redirection -> CURRENT has no interrupt).
 FLASHPROG ?= UsbdmFlashProgrammer
-USBDM     := $(FLASHPROG) -target=HCS08 -device=MC9S08JM60 -useReset -masserase -unsecure -program -execute
+USBDM     := $(FLASHPROG) -target=HCS08 -device=MC9S08JM60 -useReset -masserase -security=image -program -execute
 
 flash: $(COMBINED)
 	$(USBDM) $(COMBINED)

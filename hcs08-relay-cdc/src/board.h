@@ -43,14 +43,19 @@
 
 /* ---- Current sensors (ACS712ELCTR-20A, one per relay) ----
  * ADC channel of relay 1..6. AD0-AD7 = PTB0-PTB7, AD8 = PTD0, AD9 = PTD1,
- * AD10 = PTD3, AD11 = PTD4. PLACEHOLDER: find the real channels with the
- * ADC command (sensor outputs sit at about half of VDD without load). */
-#define CURRENT_ADC_CHANNELS { 0, 1, 2, 3, 4, 5 }
+ * AD10 = PTD3, AD11 = PTD4.
+ * Measured with the ADC command: AD2..AD7 sit at half of VDD (sensors),
+ * AD0/AD1 at 0, AD8 near 0, AD9-AD11 at VDD. The ORDER (which channel
+ * belongs to which relay output) is still an assumption - check with a
+ * load on each output. */
+#define CURRENT_ADC_CHANNELS { 2, 3, 4, 5, 6, 7 }
 
-/* Scale: ADC reference voltage (= VDD) and sensor sensitivity. ACS712-20A:
- * 100 mV/A at 5 V supply. If the sensor output goes through a divider,
- * reduce CURRENT_MV_PER_A accordingly. 5000 mV / 4096 / 100 mV/A
- * = 12.2 mA per ADC step. */
+/* Scale. The ACS712 is ratiometric: zero current = Vcc/2 and 100 mV/A at
+ * Vcc = 5 V, both proportional to its supply. Sensors and ADC share VDD on
+ * this board (zero current reads 2052 of 4096 although VDD is only about
+ * 4.7 V), so the scale in ADC steps does not depend on VDD:
+ * 4096 / 5000 mV * 100 mV/A = 81.9 steps/A = 12.2 mA per step.
+ * Keep CURRENT_VREF_MV = 5000 (the sensor's nominal supply). */
 #define CURRENT_VREF_MV   5000UL
 #define CURRENT_MV_PER_A  100UL
 /* 1000000 / 4096 = 15625 / 64; written so that SDCC's 32-bit arithmetic

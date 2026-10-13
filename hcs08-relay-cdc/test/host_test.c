@@ -22,10 +22,17 @@ uint8_t host_mem[0x10000];
 static double sim_ms;
 static double cur_a[16], cur_ph[16], cur_h3[16], cur_noise[16], cur_hz[16];
 static uint16_t adc_fixed[32];
-uint16_t host_adc(uint8_t ch)
+static const uint8_t sensor_ch[6] = CURRENT_ADC_CHANNELS;
+uint16_t host_adc(uint8_t adc_ch)
 {
-    if (ch >= 16)
-        return adc_fixed[ch & 31];
+    int ch = -1;                        /* model arrays are indexed by relay */
+    if (adc_ch >= 16)
+        return adc_fixed[adc_ch & 31];
+    for (int i = 0; i < 6; i++)
+        if (sensor_ch[i] == adc_ch)
+            ch = i;
+    if (ch < 0)
+        return 2040;                    /* not a sensor: idle level */
     double lsb_a = CURRENT_UA_PER_LSB / 1e6;            /* A per step */
     double f = cur_hz[ch] ? cur_hz[ch] : 50.0, w = 2 * M_PI * f * sim_ms / 1000.0;
     double i = cur_a[ch] * sqrt(2) * (sin(w + cur_ph[ch]) + cur_h3[ch] * sin(3 * w));
@@ -246,6 +253,90 @@ static void expect_reply(const char *cmd, const char *reply)
     CHECK(strcmp(rx, reply) == 0, "cmd '%s': got '%s' want '%s'", cmd, rx, reply);
 }
 
+static void reconnect(void)
+{
+    usb_init();
+    bus_reset();
+    CHECK(control_write(0x00, 5, 7, 0, 0, 0) == 0, "set address again");
+    CHECK(control_write(0x00, 9, 1, 0, 0, 0) == 0, "set configuration again");
+    CHECK(control_write(0x21, 0x22, 3, 0, 0, 0) == 0, "DTR again");
+    ep2_toggle_host = ep3_toggle_host = 0;
+}
+
+/* NVFIX: boot page 0xFE00-0xFFFF as left by USBDM -unsecure */
+extern int host_flash_ops;
+static void nv_page(uint8_t nvprot, uint8_t nvopt, uint8_t fprot, uint8_t fopt, uint16_t reset_vec)
+{
+    int i;
+    for (i = 0; i < 0x200; i++)
+        host_mem[0xFE00 + i] = 0xFF;
+    for (i = 0; i < 0x80; i++)               /* end of the bootloader code */
+        host_mem[0xFE00 + i] = (uint8_t)(i * 7 + 1);
+    memcpy(host_mem + 0xFFA0, "\x12\x34\x56\x78\x9A\xBC\xDE\xF0\x55\xAA", 10);
+    for (i = 0xFFC0; i < 0xFFFE; i += 2) {   /* bootloader vectors */
+        host_mem[i] = 0xF0; host_mem[i + 1] = (uint8_t)i;
+    }
+    host_mem[0xFFFE] = (uint8_t)(reset_vec >> 8);
+    host_mem[0xFFFF] = (uint8_t)reset_vec;
+    host_mem[0xFFBD] = nvprot;
+    host_mem[0xFFBF] = nvopt;
+    host_mem[0x1824] = fprot;                /* FPROT, FOPT: copies made by the reset */
+    host_mem[0x1821] = fopt;
+    reset_requested = 0;
+    memset(host_mem + BOOT_MAGIC_ADDR, 0, 4);
+}
+
+static void test_nvfix(void)
+{
+    uint8_t save[0x200], want[0x200], fprot = host_mem[0x1824], fopt = host_mem[0x1821];
+    int ops;
+    memcpy(save, host_mem + 0xFE00, 0x200);
+
+    /* correct and active */
+    nv_page(0xDA, 0x3E, 0xDA, 0x02, 0xDC00);
+    expect_reply("NVFIX\n", "OK nothing to do\r\n");
+    CHECK(!reset_requested, "nvfix: no reset when ok");
+
+    /* USBDM -unsecure: NVPROT erased, NVOPT 0xFE -> page erase + rewrite */
+    nv_page(0xFF, 0xFE, 0xFF, 0xC2, 0xDC00);
+    memcpy(want, host_mem + 0xFE00, 0x200);
+    want[0x1BD] = 0xDA;
+    want[0x1BF] = 0x3E;
+    expect_reply("CURRENT\n", "ERR no interrupt vector - FOPT C2 FPROT FF - send NVFIX to repair\r\n");
+    expect_reply("NVFIX\n", "OK fixed, restarting\r\n");
+    CHECK(memcmp(host_mem + 0xFE00, want, 0x200) == 0, "nvfix: page rewritten");
+    CHECK(reset_requested && !memcmp(host_mem + BOOT_MAGIC_ADDR, "RSET", 4) && USBCTL0 == 0,
+          "nvfix: reset request");
+    reconnect();
+
+    /* both erased -> only two bytes programmed, no erase */
+    nv_page(0xFF, 0xFF, 0xFF, 0xC2, 0xDC00);
+    memcpy(want, host_mem + 0xFE00, 0x200);
+    want[0x1BD] = 0xDA;
+    want[0x1BF] = 0x3E;
+    ops = host_flash_ops;
+    expect_reply("NVFIX\n", "OK fixed, restarting\r\n");
+    CHECK(host_flash_ops - ops == 2, "nvfix: %d flash ops, want 2", host_flash_ops - ops);
+    CHECK(memcmp(host_mem + 0xFE00, want, 0x200) == 0, "nvfix: two bytes");
+    reconnect();
+
+    /* wrong values, but the page is protected */
+    nv_page(0xC0, 0xFE, 0xC0, 0xC2, 0xDC00);
+    memcpy(want, host_mem + 0xFE00, 0x200);
+    expect_reply("NVFIX\n", "ERR nvfix 03 FOPT C2 FPROT C0\r\n");
+    CHECK(memcmp(host_mem + 0xFE00, want, 0x200) == 0 && !reset_requested, "nvfix: protected untouched");
+
+    /* reset vector not in the bootloader -> refuse */
+    nv_page(0xFF, 0xFE, 0xFF, 0xC2, 0x1960);
+    memcpy(want, host_mem + 0xFE00, 0x200);
+    expect_reply("NVFIX\n", "ERR nvfix 04 FOPT C2 FPROT FF\r\n");
+    CHECK(memcmp(host_mem + 0xFE00, want, 0x200) == 0 && !reset_requested, "nvfix: no bootloader");
+
+    memcpy(host_mem + 0xFE00, save, 0x200);
+    host_mem[0x1824] = fprot;
+    host_mem[0x1821] = fopt;
+}
+
 int main(void)
 {
     uint8_t buf[256];
@@ -320,7 +411,7 @@ int main(void)
     expect_reply("ON 9\n", "ERR relay\r\n");
     expect_reply("FOO\n", "ERR command 'FOO'\r\n");
     expect_reply("\x1b[AX\n", "ERR command '<1B>[AX'\r\n");
-    expect_reply("IDX\x7f\n", "ID 6-Channel Relay Board FW 1.8 SN NOSERIAL\r\n");  /* backspace */
+    expect_reply("IDX\x7f\n", "ID 6-Channel Relay Board FW 1.11 SN NOSERIAL\r\n");  /* backspace */
     expect_reply("ON 2\nON 4\nGET\n", "OK\r\nOK\r\nSTATE 2A\r\n");
     expect_pulses("PE2 PE6");
     /* command split across two packets */
@@ -338,12 +429,9 @@ int main(void)
     CHECK(reset_requested && !memcmp(host_mem + BOOT_MAGIC_ADDR, "BOOT", 4) && USBCTL0 == 0,
           "bootloader request");
     memset(host_mem + BOOT_MAGIC_ADDR, 0, 4);
-    usb_init();                             /* back to normal for the rest */
-    bus_reset();
-    CHECK(control_write(0x00, 5, 7, 0, 0, 0) == 0, "set address again");
-    CHECK(control_write(0x00, 9, 1, 0, 0, 0) == 0, "set configuration again");
-    CHECK(control_write(0x21, 0x22, 3, 0, 0, 0) == 0, "DTR again");
-    ep2_toggle_host = ep3_toggle_host = 0;
+    reconnect();                            /* back to normal for the rest */
+
+    test_nvfix();
 
     /* long output (>64 bytes) spans packets */
     send_cmd("HELP\n");
@@ -387,7 +475,7 @@ int main(void)
         static const uint8_t slot[10] = { 0x3F, 0x9A, 0x07, 0xC2, 0xD4, 0x1B, 0x88, 0xE5, 0x90, 0x4C };
         memcpy(host_mem + SERIAL_ADDR, slot, 10);
         expect_reply("SERIAL\n", "SERIAL 3F9A07C2D41B88E5\r\n");
-        expect_reply("ID\n", "ID 6-Channel Relay Board FW 1.8 SN 3F9A07C2D41B88E5\r\n");
+        expect_reply("ID\n", "ID 6-Channel Relay Board FW 1.11 SN 3F9A07C2D41B88E5\r\n");
         n = control_read(0x80, 6, 0x0303, 0x0409, 255, buf);
         char sn[17] = { 0 };
         for (int k = 0; k < 16; k++) sn[k] = (char)buf[2 + 2 * k];

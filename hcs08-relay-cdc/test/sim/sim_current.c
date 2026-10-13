@@ -9,6 +9,7 @@
 #include <stdint.h>
 #include "jm60.h"
 #include "current.h"
+#include "board.h"
 
 #define SAMPLES ((const uint16_t *)0x6000)
 #define RESULT  ((volatile uint16_t *)0x0C00)
@@ -16,9 +17,15 @@
 
 static uint16_t t;
 
-uint16_t host_adc(uint8_t ch)
+static const uint8_t sensor_ch[6] = CURRENT_ADC_CHANNELS;
+
+uint16_t host_adc(uint8_t adc_ch)
 {
-    return SAMPLES[t * 6 + ch];
+    uint8_t i;
+    for (i = 0; i < 6; i++)
+        if (sensor_ch[i] == adc_ch)
+            return SAMPLES[t * 6 + i];
+    return 2040;
 }
 
 /* stubs for the CDC/timer functions used by the ADC debug report */

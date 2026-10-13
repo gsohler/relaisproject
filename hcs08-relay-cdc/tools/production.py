@@ -77,7 +77,7 @@ def patch_image(image, raw, out):
 
 def program(flashprog, path):
     cmd = flashprog.split() + ["-target=HCS08", "-device=MC9S08JM60", "-useReset",
-                               "-masserase", "-unsecure", "-program",
+                               "-masserase", "-security=image", "-program",
                                "-execute", path]
     print("  " + " ".join(cmd))
     return subprocess.run(cmd).returncode == 0

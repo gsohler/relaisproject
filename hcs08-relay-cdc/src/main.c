@@ -25,8 +25,9 @@
 #include "flash.h"
 #include "serial.h"
 #include "current.h"
+#include "nvfix.h"
 
-#define FW_VERSION "1.8"
+#define FW_VERSION "1.11"
 
 /* NV option bytes, programmed together with the code.
  * NVOPT 0xFFBF: KEYEN=0, FNORED=1, SEC=10 (unsecured). NVPROT 0xFFBD: no protection. */
@@ -165,19 +166,19 @@ static void err(const char *s)  { cdc_puts("ERR "); cdc_puts(s); cdc_puts("\r\n"
 extern void host_reset_hook(void);
 #endif
 
-/* Restart into the bootloader: magic word in RAM (survives the reset),
- * USB detach, then an illegal opcode resets the MCU. */
-static void enter_bootloader(void)
+/* Restart: request word in RAM (survives the reset, see layout.h), USB
+ * detach, then an illegal opcode resets the MCU.
+ * "BOOT" = stay in the bootloader, "RSET" = intentional reset -> app. */
+static void restart(const char *req)
 {
     volatile uint8_t *magic = HW_PTR(BOOT_MAGIC_ADDR);
 
-    ok();
-    delay_ms(20);                   /* let "OK" reach the host */
+    delay_ms(20);                   /* let the answer reach the host */
     DisableInterrupts();
-    magic[0] = BOOT_MAGIC_0;
-    magic[1] = BOOT_MAGIC_1;
-    magic[2] = BOOT_MAGIC_2;
-    magic[3] = BOOT_MAGIC_3;
+    magic[0] = (uint8_t)req[0];
+    magic[1] = (uint8_t)req[1];
+    magic[2] = (uint8_t)req[2];
+    magic[3] = (uint8_t)req[3];
     USBCTL0 = 0;                    /* pull-up off: host sees a disconnect */
 #ifdef HOST_TEST
     host_reset_hook();
@@ -243,7 +244,17 @@ static void execute(char *p)
         uint8_t rms = match(a, "RMS") != 0;
         uint16_t i50, irms;
         if (*a && !rms) { err("args"); return; }
-        if (!current_available()) { err("no interrupt vector - update bootloader"); return; }
+        if (!current_available()) {
+            /* FOPT bit 6 (FNORED) must be 0 and FPROT must be 0xDA, see
+             * layout.h. 0x7E/0xFF here means the programmer overwrote
+             * NVOPT/NVPROT (USBDM -unsecure). */
+            cdc_puts("ERR no interrupt vector - FOPT ");
+            put_hex8(FOPT);
+            cdc_puts(" FPROT ");
+            put_hex8(FPROT);
+            cdc_puts(" - send NVFIX to repair\r\n");
+            return;
+        }
         if (!current_get(0, &i50, &irms)) { err("no data yet"); return; }
         cdc_puts("CURRENT");
         for (i = 0; i < RELAY_COUNT; i++) {
@@ -258,7 +269,28 @@ static void execute(char *p)
         current_adc_report();
         ok();
     } else if (match(p, "BOOTLOADER")) {
-        enter_bootloader();
+        ok();
+        restart("BOOT");
+    } else if (match(p, "NVFIX")) {
+        /* Not in HELP: repairs NVPROT/NVOPT of boards programmed with
+         * USBDM -unsecure (see nvfix.c) */
+        current_pause();
+        m = nvfix_run();
+        current_resume();
+        if (m == NVFIX_OK) {
+            cdc_puts("OK nothing to do\r\n");
+        } else if (m == NVFIX_RESET) {
+            cdc_puts("OK fixed, restarting\r\n");
+            restart("RSET");
+        } else {
+            cdc_puts("ERR nvfix ");
+            put_hex8(m);
+            cdc_puts(" FOPT ");
+            put_hex8(FOPT);
+            cdc_puts(" FPROT ");
+            put_hex8(FPROT);
+            cdc_puts("\r\n");
+        }
     } else if (match(p, "HELP") || match(p, "?")) {
         cdc_puts("ON <n|ALL>, OFF <n|ALL>, TOGGLE <n>, SET <hex>, GET, ID, SERIAL,\r\n"
                  "CURRENT [RMS], ADC, BOOTLOADER\r\n");

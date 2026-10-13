@@ -46,7 +46,10 @@ static uint8_t flash_cmd(uint16_t addr, uint8_t data, uint8_t cmd)
 {
     uint16_t i, base;
     host_flash_ops++;
-    if (addr >= BOOT_START || (addr < APP_START && (addr < 0x10B0u || addr >= 0x1800u)))
+    /* the bootloader area is writable only if FPROT says "no protection"
+     * (boards programmed with USBDM -unsecure, see nvfix.c) */
+    if ((addr >= BOOT_START && !(FPROT & FPROT_FPDIS)) ||
+        (addr < APP_START && (addr < 0x10B0u || addr >= 0x1800u)))
         return FSTAT_FPVIOL;
     if (cmd == FCMD_PAGE_ERASE) {
         base = addr & (uint16_t)~(FLASH_PAGE - 1);

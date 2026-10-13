@@ -11,6 +11,9 @@ Everything builds on Linux with SDCC, without CodeWarrior. The USB stack
 is small and self-contained (`src/usb_cdc.c`, about 600 lines, polled, no
 interrupts).
 
+
+Version history: [CHANGELOG.md](CHANGELOG.md).
+
 ## Board connections
 
 | Connector | Pins |
@@ -117,6 +120,11 @@ make flash-boot       # only the bootloader; then copy the firmware via USB
 `FLASHPROG=<name>` selects another programmer executable. Mass erase also
 removes the flash protection of the bootloader area.
 
+USBDM is called with `-security=image`, so NVPROT/NVOPT are programmed as
+they are in the image. Do not use `-unsecure`: it replaces both bytes by
+default values (no protection, no vector redirection). The Makefile up to
+firmware 1.9 did that.
+
 The BDM connector is a 6-pin header (BKGD, GND, RESET, VDD).
 
 ## Production: serial numbers
@@ -154,8 +162,31 @@ be in the log.
 Bootloader 1.0 had vector redirection switched off (NVOPT 0x42 instead of
 0x3E), so application interrupts do not work with it. Firmware 1.7 and
 later detect this and then run without the current measurement interrupt
-(`CURRENT` answers `ERR no interrupt vector - update bootloader`; `ADC`
-works). Boards with bootloader 1.0 need `make reprogram` once.
+(`CURRENT` answers `ERR no interrupt vector ...`; `ADC` works). Boards
+with bootloader 1.0 need `make reprogram` once.
+
+### Repair without USBDM: `NVFIX`
+
+Boards programmed with the Makefile up to firmware 1.9 (USBDM `-unsecure`)
+have NVPROT = 0xFF and NVOPT = 0xFE: no write protection and no vector
+redirection. `CURRENT` then answers
+`ERR no interrupt vector - FOPT C2 FPROT FF - send NVFIX to repair`.
+
+Because the protection is off, firmware 1.11 can repair this itself:
+
+1. update to firmware 1.11 or later over the bootloader drive,
+2. send `NVFIX` (not listed in `HELP`).
+
+The firmware copies the last flash page (0xFE00-0xFFFF: end of the
+bootloader, serial number, NV bytes, vectors) to RAM, erases it and
+programs it back with NVPROT 0xDA / NVOPT 0x3E, verifies it, answers
+`OK fixed, restarting` and resets. During about 30 ms the page is empty:
+do not unplug the board while `NVFIX` runs. If power is lost exactly then,
+the board needs USBDM (`make reprogram SERIAL=...`).
+
+Other answers: `OK nothing to do` (already correct), `ERR nvfix 03 ...`
+(page write-protected, other values than expected), `ERR nvfix 04 ...`
+(no bootloader on the board), `ERR nvfix 05 ...` (flash write failed).
 
 ## Firmware update over USB (bootloader)
 
@@ -273,8 +304,12 @@ Resolution is about 12 mA per ADC step; with sensor noise, expect a floor
 of a few 10 mA. Values are at most ~0.2 s old. Sampling pauses for the
 few ms of a flash write (relay state) and restarts the window.
 
-**Finding the channels:** `CURRENT_ADC_CHANNELS` in `src/board.h` is a
-placeholder (AD0..AD5). Run `ADC`: sensor outputs show a mean of about half
+**Channels:** measured on the board: the sensors are on AD2..AD7
+(PTB2..PTB7). Which channel belongs to which output is still to be
+confirmed with a load. The scale does not depend on VDD (about 4.7 V on
+this board): the ACS712 is ratiometric and shares VDD with the ADC.
+
+**Finding the channels on another board:** Run `ADC`: sensor outputs show a mean of about half
 the ADC range (about 2048 at VDD 5 V) and a small peak-peak value. Switch a
 load (a kettle, a heater) on one output and run `ADC` again: that channel's
 peak-peak value rises. The last line shows VDD, measured with the internal
